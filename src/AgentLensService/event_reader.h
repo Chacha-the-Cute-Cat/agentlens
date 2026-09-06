@@ -5,6 +5,8 @@
 #include <windows.h>
 #include "AgentLensProtocol/agl_event.h"
 
+class DnsAssociator;
+
 class EventReader
 {
 public:
@@ -13,7 +15,12 @@ public:
 
     bool ReadOnce(std::vector<uint8_t>& buffer);
     void PrintRawEvents(const std::vector<uint8_t>& buffer) const;
-    void PrintJsonEvents(const std::vector<uint8_t>& buffer) const;
+    void PrintJsonEvents(
+        const std::vector<uint8_t>& buffer,
+        FILE* output = nullptr,
+        unsigned long long filterPid = 0,
+        unsigned long filterType = 0,
+        const DnsAssociator* dns = nullptr) const;
 
 private:
     bool OpenSharedRing();

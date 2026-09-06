@@ -8,6 +8,17 @@
 static PFLT_FILTER AglFileFilter = NULL;
 static BOOLEAN AglFileMonitorInstalled = FALSE;
 
+typedef struct _AGL_FILE_CONTEXT {
+    ULONG64 ProcessId;
+    ULONG   DesiredAccess;
+    ULONG   CreateOptions;
+} AGL_FILE_CONTEXT;
+
+static const FLT_CONTEXT_REGISTRATION AglFileContexts[] = {
+    { FLT_STREAMHANDLE_CONTEXT, 0, NULL, sizeof(AGL_FILE_CONTEXT), 'glFA', NULL, NULL, NULL },
+    { FLT_CONTEXT_END }
+};
+
 static FLT_PREOP_CALLBACK_STATUS AglFilePreCreate(
     PFLT_CALLBACK_DATA Data,
     PCFLT_RELATED_OBJECTS FltObjects,
@@ -41,12 +52,33 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostClose(
     PVOID CompletionContext,
     FLT_POST_OPERATION_FLAGS Flags);
 
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostQuery(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags);
+
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostSecurity(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags);
+
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostDirectory(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags);
+
 static const FLT_OPERATION_REGISTRATION AglFileOperations[] = {
     { IRP_MJ_CREATE, 0, AglFilePreCreate, NULL, NULL },
     { IRP_MJ_SET_INFORMATION, 0, AglFilePreSetInfo, NULL, NULL },
     { IRP_MJ_READ, 0, NULL, AglFilePostRead, NULL },
     { IRP_MJ_WRITE, 0, AglFilePreWrite, AglFilePostWrite, NULL },
     { IRP_MJ_CLOSE, 0, NULL, AglFilePostClose, NULL },
+    { IRP_MJ_QUERY_INFORMATION, 0, NULL, AglFilePostQuery, NULL },
+    { IRP_MJ_QUERY_SECURITY, 0, NULL, AglFilePostSecurity, NULL },
+    { IRP_MJ_DIRECTORY_CONTROL, 0, NULL, AglFilePostDirectory, NULL },
     { IRP_MJ_OPERATION_END }
 };
 
@@ -54,7 +86,7 @@ static const FLT_REGISTRATION AglFileRegistration = {
     sizeof(FLT_REGISTRATION),
     FLT_REGISTRATION_VERSION,
     0,
-    NULL,
+    (FLT_CONTEXT_REGISTRATION*)AglFileContexts,
     (FLT_OPERATION_REGISTRATION*)AglFileOperations,
     NULL,
     NULL,
@@ -72,7 +104,10 @@ static void AglEmitFileEvent(
     PFLT_CALLBACK_DATA Data,
     PCFLT_RELATED_OBJECTS FltObjects,
     ULONG64 Offset,
-    ULONG Length)
+    ULONG Length,
+    ULONG InfoClass,
+    ULONG SecurityInformation,
+    ULONG NameLength)
 {
     UNREFERENCED_PARAMETER(FltObjects);
     FLT_FILE_NAME_INFORMATION* nameInfo = NULL;
@@ -110,6 +145,9 @@ static void AglEmitFileEvent(
     RtlZeroMemory(event, sizeof(AGL_EVENT_HEADER) + payloadLength);
     event->Offset = Offset;
     event->Length = Length;
+    event->InfoClass = InfoClass;
+    event->SecurityInformation = SecurityInformation;
+    event->NameLength = NameLength;
     event->PathLength = pathLength;
     RtlCopyMemory(event->Data, nameInfo->Name.Buffer, pathLength);
 
@@ -166,7 +204,10 @@ static BOOLEAN AglFileShouldDenyWrite(PFLT_CALLBACK_DATA Data)
         &nameInfo);
     if (NT_SUCCESS(status) && nameInfo)
     {
-        deny = AglPolicyShouldDeny(AGL_EVENT_FILE_WRITE, &nameInfo->Name);
+        deny = AglPolicyShouldDenyEx(
+            AGL_EVENT_FILE_WRITE,
+            &nameInfo->Name,
+            FILE_WRITE_DATA);
         FltReleaseFileNameInformation(nameInfo);
     }
 
@@ -185,7 +226,10 @@ static BOOLEAN AglFileShouldDenyRename(PFLT_CALLBACK_DATA Data)
         &nameInfo);
     if (NT_SUCCESS(status) && nameInfo)
     {
-        deny = AglPolicyShouldDeny(AGL_EVENT_FILE_RENAME, &nameInfo->Name);
+        deny = AglPolicyShouldDenyEx(
+            AGL_EVENT_FILE_RENAME,
+            &nameInfo->Name,
+            FILE_WRITE_DATA);
         FltReleaseFileNameInformation(nameInfo);
     }
 
@@ -206,7 +250,32 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreCreate(
         return FLT_PREOP_COMPLETE;
     }
 
-    AglEmitFileEvent(AGL_EVENT_FILE_OPEN, Data, FltObjects, 0, 0);
+    {
+        PFLT_CONTEXT context = NULL;
+        AGL_FILE_CONTEXT* fileCtx = NULL;
+
+        if (NT_SUCCESS(FltAllocateContext(
+                AglFileFilter,
+                FLT_STREAMHANDLE_CONTEXT,
+                sizeof(AGL_FILE_CONTEXT),
+                PagedPool,
+                &context)))
+        {
+            fileCtx = (AGL_FILE_CONTEXT*)context;
+            fileCtx->ProcessId = (ULONG64)(ULONG_PTR)PsGetCurrentProcessId();
+            fileCtx->DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
+            fileCtx->CreateOptions = Data->Iopb->Parameters.Create.Options;
+            FltSetStreamHandleContext(
+                FltObjects->Instance,
+                FltObjects->FileObject,
+                FLT_SET_CONTEXT_REPLACE_IF_EXISTS,
+                context,
+                NULL);
+            FltReleaseContext(context);
+        }
+    }
+
+    AglEmitFileEvent(AGL_EVENT_FILE_OPEN, Data, FltObjects, 0, 0, 0, 0, 0);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
@@ -245,7 +314,7 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreSetInfo(
             Data->IoStatus.Status = STATUS_ACCESS_DENIED;
             return FLT_PREOP_COMPLETE;
         }
-        AglEmitFileEvent(AGL_EVENT_FILE_RENAME, Data, FltObjects, 0, 0);
+        AglEmitFileEvent(AGL_EVENT_FILE_RENAME, Data, FltObjects, 0, 0, 0, 0, 0);
     }
     else if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileDispositionInformation ||
              Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileDispositionInformationEx)
@@ -256,7 +325,10 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreSetInfo(
                 FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
                 &nameInfo)))
         {
-            if (nameInfo && AglPolicyShouldDeny(AGL_EVENT_FILE_DELETE, &nameInfo->Name))
+            if (nameInfo && AglPolicyShouldDenyEx(
+                    AGL_EVENT_FILE_DELETE,
+                    &nameInfo->Name,
+                    DELETE))
             {
                 FltReleaseFileNameInformation(nameInfo);
                 Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -267,7 +339,7 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreSetInfo(
                 FltReleaseFileNameInformation(nameInfo);
             }
         }
-        AglEmitFileEvent(AGL_EVENT_FILE_DELETE, Data, FltObjects, 0, 0);
+        AglEmitFileEvent(AGL_EVENT_FILE_DELETE, Data, FltObjects, 0, 0, 0, 0, 0);
     }
 
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
@@ -289,7 +361,79 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostRead(
             Data,
             FltObjects,
             Data->Iopb->Parameters.Read.ByteOffset.QuadPart,
-            (ULONG)Data->IoStatus.Information);
+            (ULONG)Data->IoStatus.Information,
+            0, 0, 0);
+    }
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostQuery(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags)
+{
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(Flags);
+    if (NT_SUCCESS(Data->IoStatus.Status))
+    {
+    AglEmitFileEvent(
+        AGL_EVENT_FILE_QUERY,
+        Data,
+        FltObjects,
+        0,
+        0,
+        Data->Iopb->Parameters.QueryFileInformation.FileInformationClass,
+        0,
+        0);
+    }
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostSecurity(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags)
+{
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(Flags);
+    if (NT_SUCCESS(Data->IoStatus.Status))
+    {
+    AglEmitFileEvent(
+        AGL_EVENT_FILE_SECURITY,
+        Data,
+        FltObjects,
+        0,
+        0,
+        0,
+        Data->Iopb->Parameters.QuerySecurity.SecurityInformation,
+        0);
+    }
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+static FLT_POSTOP_CALLBACK_STATUS AglFilePostDirectory(
+    PFLT_CALLBACK_DATA Data,
+    PCFLT_RELATED_OBJECTS FltObjects,
+    PVOID CompletionContext,
+    FLT_POST_OPERATION_FLAGS Flags)
+{
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(Flags);
+    if (NT_SUCCESS(Data->IoStatus.Status))
+    {
+    AglEmitFileEvent(
+        AGL_EVENT_FILE_DIRECTORY,
+        Data,
+        FltObjects,
+        0,
+        0,
+        Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileInformationClass,
+        0,
+        Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName
+            ? Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName->Length
+            : 0);
     }
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -310,7 +454,8 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostWrite(
             Data,
             FltObjects,
             Data->Iopb->Parameters.Write.ByteOffset.QuadPart,
-            (ULONG)Data->IoStatus.Information);
+            (ULONG)Data->IoStatus.Information,
+            0, 0, 0);
     }
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -323,7 +468,7 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostClose(
 {
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(Flags);
-    AglEmitFileEvent(AGL_EVENT_FILE_CLOSE, Data, FltObjects, 0, 0);
+    AglEmitFileEvent(AGL_EVENT_FILE_CLOSE, Data, FltObjects, 0, 0, 0, 0, 0);
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 

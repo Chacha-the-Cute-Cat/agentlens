@@ -22,3 +22,4 @@ void     AglFileMonitorUninitialize(void);
 
 NTSTATUS AglNetworkMonitorInitialize(PDRIVER_OBJECT DriverObject);
 void     AglNetworkMonitorUninitialize(void);
+void     AglNetworkGetStreamStats(ULONG64* Bytes, ULONG64* Packets);

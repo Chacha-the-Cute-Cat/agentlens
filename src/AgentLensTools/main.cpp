@@ -23,6 +23,8 @@ static void PrintUsage()
     wprintf(L"  --driver-start\n");
     wprintf(L"  --driver-restart\n");
     wprintf(L"  --selftest\n");
+    wprintf(L"  --fuzz-ioctl <count>\n");
+    wprintf(L"  --stream-stats\n");
 }
 
 static bool SendControl(
@@ -119,6 +121,60 @@ static void RunSelftest(HANDLE device)
     if (failed != 0)
     {
         ExitProcess(1);
+    }
+}
+
+static void RunFuzzIoctl(HANDLE device, ULONG count)
+{
+    std::vector<uint8_t> buffer(512);
+    DWORD bytes = 0;
+    ULONG rejected = 0;
+
+    srand(GetTickCount());
+    for (ULONG i = 0; i < count; i++)
+    {
+        ULONG len = rand() % buffer.size();
+        for (ULONG j = 0; j < len; j++)
+        {
+            buffer[j] = static_cast<uint8_t>(rand());
+        }
+        if (!DeviceIoControl(
+                device,
+                AGL_CONTROL_IOCTL,
+                buffer.data(),
+                len,
+                buffer.data(),
+                static_cast<DWORD>(buffer.size()),
+                &bytes,
+                nullptr))
+        {
+            rejected++;
+        }
+    }
+
+    wprintf(L"fuzz_ioctl total=%u rejected=%u\n", count, rejected);
+}
+
+static void RunStreamStats(HANDLE device)
+{
+    AGL_STREAM_STATS stats{};
+    ULONG returned = 0;
+    if (SendControl(
+            device,
+            AGL_OP_GET_STREAM_STATS,
+            nullptr,
+            0,
+            &stats,
+            sizeof(stats),
+            returned))
+    {
+        wprintf(L"StreamBytes=%llu StreamPackets=%llu\n",
+            static_cast<unsigned long long>(stats.Bytes),
+            static_cast<unsigned long long>(stats.Packets));
+    }
+    else
+    {
+        wprintf(L"Stream stats query failed.\n");
     }
 }
 
@@ -236,6 +292,11 @@ int wmain(int argc, wchar_t* argv[])
                 static_cast<unsigned long long>(stats.EventsWritten),
                 static_cast<unsigned long long>(stats.EventsRead),
                 static_cast<unsigned long long>(stats.EventsDropped));
+            wprintf(L"CriticalDropped=%llu\n",
+                static_cast<unsigned long long>(stats.CriticalDropped));
+            wprintf(L"RingUsed=%llu RingTotal=%llu\n",
+                static_cast<unsigned long long>(stats.RingBytesUsed),
+                static_cast<unsigned long long>(stats.RingBytesTotal));
         }
     }
     else if (lstrcmpiW(argv[1], L"--subscribe") == 0)
@@ -305,6 +366,14 @@ int wmain(int argc, wchar_t* argv[])
     else if (lstrcmpiW(argv[1], L"--selftest") == 0)
     {
         RunSelftest(device);
+    }
+    else if (lstrcmpiW(argv[1], L"--fuzz-ioctl") == 0 && argc >= 3)
+    {
+        RunFuzzIoctl(device, static_cast<ULONG>(_wtoi(argv[2])));
+    }
+    else if (lstrcmpiW(argv[1], L"--stream-stats") == 0)
+    {
+        RunStreamStats(device);
     }
     else
     {

@@ -38,6 +38,18 @@ Then reboot and run stress/load tests. To disable:
 disable_driver_verifier.cmd
 ```
 
+## Full Verification
+
+```cmd
+run_full_verification.cmd
+```
+
+Then reboot and run:
+
+```cmd
+run_post_reboot_tests.cmd
+```
+
 Expected checks:
 
 - driver load/unload without leak

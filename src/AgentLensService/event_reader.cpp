@@ -1,6 +1,7 @@
 #include "event_reader.h"
 #include "control_client.h"
 #include "AgentLensProtocol/agl_event.h"
+#include "dns_associator.h"
 
 #include <cstdio>
 #include <cwchar>
@@ -23,13 +24,20 @@ namespace
         case AGL_EVENT_FILE_WRITE: return L"file.write";
         case AGL_EVENT_FILE_DELETE: return L"file.delete";
         case AGL_EVENT_FILE_CLOSE: return L"file.close";
+        case AGL_EVENT_FILE_QUERY: return L"file.query";
+        case AGL_EVENT_FILE_SECURITY: return L"file.security";
+        case AGL_EVENT_FILE_DIRECTORY: return L"file.directory";
         case AGL_EVENT_REGISTRY_OPEN: return L"registry.open";
         case AGL_EVENT_REGISTRY_QUERY: return L"registry.query";
         case AGL_EVENT_REGISTRY_SET_VALUE: return L"registry.set";
+        case AGL_EVENT_REGISTRY_ENUM_KEY: return L"registry.enum_key";
+        case AGL_EVENT_REGISTRY_ENUM_VALUE: return L"registry.enum_value";
         case AGL_EVENT_REGISTRY_DELETE_KEY: return L"registry.delete_key";
         case AGL_EVENT_REGISTRY_DELETE_VALUE: return L"registry.delete_value";
         case AGL_EVENT_OBJECT_HANDLE: return L"object.handle";
         case AGL_EVENT_NETWORK_CONNECT: return L"network.connect";
+        case AGL_EVENT_NETWORK_FLOW_ESTABLISHED: return L"network.flow_established";
+        case AGL_EVENT_NETWORK_FLOW_CLOSED: return L"network.flow_closed";
         default: return L"unknown";
         }
     }
@@ -210,7 +218,12 @@ void EventReader::PrintRawEvents(const std::vector<uint8_t>& buffer) const
     }
 }
 
-void EventReader::PrintJsonEvents(const std::vector<uint8_t>& buffer) const
+void EventReader::PrintJsonEvents(
+    const std::vector<uint8_t>& buffer,
+    FILE* output,
+    unsigned long long filterPid,
+    unsigned long filterType,
+    const DnsAssociator* dns) const
 {
     const uint8_t* p = buffer.data();
     size_t remaining = buffer.size();
@@ -231,6 +244,20 @@ void EventReader::PrintJsonEvents(const std::vector<uint8_t>& buffer) const
             break;
         }
 
+        if (filterPid && header->ProcessId != filterPid)
+        {
+            p += recordHeader->RecordLength;
+            remaining -= recordHeader->RecordLength;
+            continue;
+        }
+
+        if (filterType && header->EventType != filterType)
+        {
+            p += recordHeader->RecordLength;
+            remaining -= recordHeader->RecordLength;
+            continue;
+        }
+
         const uint8_t* payload = p + sizeof(AGL_RING_RECORD_HEADER) + sizeof(AGL_EVENT_HEADER);
         ULONG payloadLength = header->PayloadLength;
         (void)payload;
@@ -245,17 +272,101 @@ void EventReader::PrintJsonEvents(const std::vector<uint8_t>& buffer) const
         json += L"\"parent_pid\":" + std::to_wstring(header->ParentProcessId) + L",";
         json += L"\"correlation\":" + std::to_wstring(header->CorrelationId) + L",";
         json += L"\"status\":\"" + std::to_wstring(header->ResultStatus) + L"\",";
+        json += L"\"flags\":" + std::to_wstring(header->Flags) + L",";
         json += L"\"payload_bytes\":" + std::to_wstring(payloadLength);
 
-        if (payloadLength > 0)
+        switch (header->EventType)
         {
-            json += L",\"payload_base64\":\"";
-            // Base64 is intentionally omitted for readability in v0.1.
-            json += L"\"";
+        case AGL_EVENT_FILE_OPEN:
+        case AGL_EVENT_FILE_RENAME:
+        case AGL_EVENT_FILE_READ:
+        case AGL_EVENT_FILE_WRITE:
+        case AGL_EVENT_FILE_DELETE:
+        case AGL_EVENT_FILE_CLOSE:
+        case AGL_EVENT_FILE_QUERY:
+        case AGL_EVENT_FILE_SECURITY:
+        case AGL_EVENT_FILE_DIRECTORY:
+            if (payloadLength >= sizeof(AGL_FILE_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* file = reinterpret_cast<const AGL_FILE_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"desired_access\":" + std::to_wstring(file->DesiredAccess);
+                json += L",\"create_options\":" + std::to_wstring(file->CreateOptions);
+                json += L",\"create_disposition\":" + std::to_wstring(file->CreateDisposition);
+                json += L",\"offset\":" + std::to_wstring(file->Offset);
+                json += L",\"length\":" + std::to_wstring(file->Length);
+                json += L",\"security_information\":" + std::to_wstring(file->SecurityInformation);
+                json += L",\"info_class\":" + std::to_wstring(file->InfoClass);
+                json += L",\"name_length\":" + std::to_wstring(file->NameLength);
+                json += L",\"path\":\"" + JsonEscape(file->Data, file->PathLength / sizeof(wchar_t)) + L"\"";
+            }
+            break;
+
+        case AGL_EVENT_REGISTRY_OPEN:
+        case AGL_EVENT_REGISTRY_QUERY:
+        case AGL_EVENT_REGISTRY_SET_VALUE:
+        case AGL_EVENT_REGISTRY_ENUM_KEY:
+        case AGL_EVENT_REGISTRY_ENUM_VALUE:
+        case AGL_EVENT_REGISTRY_DELETE_KEY:
+        case AGL_EVENT_REGISTRY_DELETE_VALUE:
+            if (payloadLength >= sizeof(AGL_REGISTRY_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* reg = reinterpret_cast<const AGL_REGISTRY_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"desired_access\":" + std::to_wstring(reg->DesiredAccess);
+                json += L",\"value_type\":" + std::to_wstring(reg->ValueType);
+                json += L",\"value_length\":" + std::to_wstring(reg->ValueLength);
+                json += L",\"value_hash\":" + std::to_wstring(reg->ValueHash);
+                json += L",\"flags\":" + std::to_wstring(reg->Flags);
+                json += L",\"index\":" + std::to_wstring(reg->Index);
+                json += L",\"info_class\":" + std::to_wstring(reg->InfoClass);
+                json += L",\"path\":\"" + JsonEscape(reg->Data, reg->PathLength / sizeof(wchar_t)) + L"\"";
+            }
+            break;
+
+        case AGL_EVENT_NETWORK_CONNECT:
+        case AGL_EVENT_NETWORK_FLOW_ESTABLISHED:
+        case AGL_EVENT_NETWORK_FLOW_CLOSED:
+            if (payloadLength >= sizeof(AGL_NETWORK_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* net = reinterpret_cast<const AGL_NETWORK_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"protocol\":" + std::to_wstring(net->Protocol);
+                json += L",\"remote_port\":" + std::to_wstring(net->RemotePort);
+                json += L",\"local_port\":" + std::to_wstring(net->LocalPort);
+                json += L",\"bytes_sent\":" + std::to_wstring(net->BytesSent);
+                json += L",\"bytes_received\":" + std::to_wstring(net->BytesReceived);
+                json += L",\"packets_sent\":" + std::to_wstring(net->PacketsSent);
+                json += L",\"packets_received\":" + std::to_wstring(net->PacketsReceived);
+
+                std::wstring remoteIp = DnsAssociator::FormatIPv4(net->RemoteAddress);
+                if (!remoteIp.empty())
+                {
+                    json += L",\"remote_ip\":\"" + JsonEscape(remoteIp.c_str(), remoteIp.size()) + L"\"";
+                    if (dns)
+                    {
+                        std::wstring dnsName = dns->Resolve(
+                            static_cast<unsigned long>(header->ProcessId),
+                            remoteIp);
+                        if (!dnsName.empty())
+                        {
+                            json += L",\"dns_name\":\"" + JsonEscape(dnsName.c_str(), dnsName.size()) + L"\"";
+                        }
+                    }
+                }
+            }
+            break;
         }
         json += L"}";
 
-        wprintf(L"%s\n", json.c_str());
+        if (output)
+        {
+            fwprintf(output, L"%s\n", json.c_str());
+        }
+        else
+        {
+            wprintf(L"%s\n", json.c_str());
+        }
 
         p += recordHeader->RecordLength;
         remaining -= recordHeader->RecordLength;

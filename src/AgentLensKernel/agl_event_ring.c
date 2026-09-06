@@ -109,6 +109,7 @@ NTSTATUS AglEventRingInitialize(SIZE_T Size)
     AglEventRing.Written = 0;
     AglEventRing.Read = 0;
     AglEventRing.Dropped = 0;
+    AglEventRing.CriticalDropped = 0;
     AglEventRing.ActiveSubscribers = 0;
     KeInitializeSpinLock(&AglEventRing.Lock);
 
@@ -177,6 +178,10 @@ NTSTATUS AglEventRingWrite(PVOID Data, ULONG Length)
     KLOCK_QUEUE_HANDLE lockHandle;
     PUCHAR base;
     SIZE_T head;
+    SIZE_T tail;
+    SIZE_T used;
+    SIZE_T freeSpace;
+    AGL_RING_RECORD_HEADER* recordHeader = (AGL_RING_RECORD_HEADER*)Data;
 
     if (!Data || Length == 0)
     {
@@ -186,10 +191,22 @@ NTSTATUS AglEventRingWrite(PVOID Data, ULONG Length)
     base = (PUCHAR)AglEventRing.Base;
     KeAcquireInStackQueuedSpinLock(&AglEventRing.Lock, &lockHandle);
     head = AglEventRing.Head;
+    tail = AglEventRing.Tail;
 
     if (Length > AglEventRing.Size)
     {
         AglEventRing.Dropped++;
+        KeReleaseInStackQueuedSpinLock(&lockHandle);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    used = (head >= tail) ? (head - tail) : (AglEventRing.Size - tail + head);
+    freeSpace = AglEventRing.Size - used;
+
+    if ((recordHeader->Flags & AGL_EVENT_FLAG_CRITICAL) && Length > freeSpace)
+    {
+        AglEventRing.Dropped++;
+        AglEventRing.CriticalDropped++;
         KeReleaseInStackQueuedSpinLock(&lockHandle);
         return STATUS_BUFFER_TOO_SMALL;
     }
@@ -299,6 +316,7 @@ void AglEventRingGetStats(PVOID Stats, ULONG StatsLength)
     local.EventsWritten = AglEventRing.Written;
     local.EventsRead = AglEventRing.Read;
     local.EventsDropped = AglEventRing.Dropped;
+    local.CriticalDropped = AglEventRing.CriticalDropped;
     local.RingBytesTotal = (ULONG64)AglEventRing.Size;
     local.RingBytesUsed = (AglEventRing.Head >= AglEventRing.Tail)
         ? (ULONG64)(AglEventRing.Head - AglEventRing.Tail)

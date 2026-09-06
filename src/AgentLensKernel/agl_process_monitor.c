@@ -1,3 +1,4 @@
+#include <ntifs.h>
 #include "agl_monitors.h"
 #include "agl_context.h"
 #include "agl_event.h"
@@ -6,6 +7,73 @@
 #include "agl_trace.h"
 
 static BOOLEAN AglProcessMonitorInstalled = FALSE;
+
+static void AglCaptureTokenFields(
+    PEPROCESS Process,
+    PULONG SidHash,
+    PULONG IntegrityLevel,
+    PULONG PrivilegeHash)
+{
+    PACCESS_TOKEN token = NULL;
+    PVOID info = NULL;
+    NTSTATUS status;
+
+    *SidHash = 0;
+    *IntegrityLevel = 0;
+    *PrivilegeHash = 0;
+
+    token = PsReferencePrimaryToken(Process);
+    if (!token)
+    {
+        return;
+    }
+
+    status = SeQueryInformationToken(token, TokenUser, &info);
+    if (NT_SUCCESS(status) && info)
+    {
+        PTOKEN_USER user = (PTOKEN_USER)info;
+        if (user->User.Sid)
+        {
+            PUCHAR sid = (PUCHAR)user->User.Sid;
+            ULONG len = RtlLengthSid(user->User.Sid);
+            for (ULONG i = 0; i < len; i++)
+            {
+                *SidHash = *SidHash * 33 + sid[i];
+            }
+        }
+        ExFreePool(info);
+        info = NULL;
+    }
+
+    status = SeQueryInformationToken(token, TokenIntegrityLevel, &info);
+    if (NT_SUCCESS(status) && info)
+    {
+        PTOKEN_MANDATORY_LABEL label = (PTOKEN_MANDATORY_LABEL)info;
+        if (label->Label.Sid)
+        {
+            *IntegrityLevel = *RtlSubAuthoritySid(
+                label->Label.Sid,
+                (ULONG)(*RtlSubAuthorityCountSid(label->Label.Sid) - 1));
+        }
+        ExFreePool(info);
+        info = NULL;
+    }
+
+    status = SeQueryInformationToken(token, TokenPrivileges, &info);
+    if (NT_SUCCESS(status) && info)
+    {
+        PTOKEN_PRIVILEGES privileges = (PTOKEN_PRIVILEGES)info;
+        for (ULONG i = 0; i < privileges->PrivilegeCount; i++)
+        {
+            ULONG64 luid = (ULONG64)privileges->Privileges[i].Luid.LowPart |
+                ((ULONG64)privileges->Privileges[i].Luid.HighPart << 32);
+            *PrivilegeHash = *PrivilegeHash * 33 + (ULONG)luid;
+        }
+        ExFreePool(info);
+    }
+
+    PsDereferencePrimaryToken(token);
+}
 
 static PWCHAR AglFindLastBackslash(PCWSTR Str)
 {
@@ -86,6 +154,15 @@ static void AglProcessNotify(
 
         if (ctx)
         {
+            AglCaptureTokenFields(
+                Process,
+                &ctx->TokenSidHash,
+                &ctx->TokenIntegrityLevel,
+                &ctx->TokenPrivilegeHash);
+            ctx->TokenSnapshotValid =
+                ctx->TokenSidHash != 0 ||
+                ctx->TokenIntegrityLevel != 0 ||
+                ctx->TokenPrivilegeHash != 0;
             AglContextReleaseProcess(ctx);
         }
     }

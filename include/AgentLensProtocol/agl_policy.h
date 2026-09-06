@@ -21,10 +21,14 @@ typedef struct _AGL_POLICY_HEADER {
 typedef struct _AGL_POLICY_RULE {
     unsigned long EventType;
     unsigned long Action;      // 0 = allow/log, 1 = deny
+    unsigned long RuleSet;
     unsigned long Priority;
     unsigned long AccessMask;
+    unsigned long ImageHash;
+    unsigned long UserSidHash;
     unsigned long PathLength;
     unsigned long ProcessLength;
+    unsigned long CommandLineLength;
     wchar_t       Data[1];     // Path, followed by Process
 } AGL_POLICY_RULE;
 

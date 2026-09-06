@@ -15,6 +15,7 @@
 
 #include "agl_monitors.h"
 #include "agl_control.h"
+#include "agl_context.h"
 #include "agl_event.h"
 #include "agl_policy.h"
 #include "agl_trace.h"
@@ -26,10 +27,30 @@ static UINT32 AglCalloutConnectV4 = 0;
 static UINT32 AglCalloutConnectV6 = 0;
 static UINT32 AglCalloutRecvV4 = 0;
 static UINT32 AglCalloutRecvV6 = 0;
+static UINT32 AglCalloutFlowV4 = 0;
+static UINT32 AglCalloutFlowV6 = 0;
+static UINT32 AglCalloutCloseV4 = 0;
+static UINT32 AglCalloutCloseV6 = 0;
 static UINT64 AglFilterConnectV4 = 0;
 static UINT64 AglFilterConnectV6 = 0;
 static UINT64 AglFilterRecvV4 = 0;
 static UINT64 AglFilterRecvV6 = 0;
+static UINT64 AglFilterFlowV4 = 0;
+static UINT64 AglFilterFlowV6 = 0;
+static UINT64 AglFilterCloseV4 = 0;
+static UINT64 AglFilterCloseV6 = 0;
+static UINT32 AglCalloutStreamV4 = 0;
+static UINT32 AglCalloutStreamV6 = 0;
+static UINT64 AglFilterStreamV4 = 0;
+static UINT64 AglFilterStreamV6 = 0;
+static volatile ULONG64 AglStreamBytes = 0;
+static volatile ULONG64 AglStreamPackets = 0;
+
+void AglNetworkGetStreamStats(ULONG64* Bytes, ULONG64* Packets)
+{
+    if (Bytes) *Bytes = AglStreamBytes;
+    if (Packets) *Packets = AglStreamPackets;
+}
 
 DEFINE_GUID(AGL_CALLOUT_CONNECT_V4,
     0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21);
@@ -39,6 +60,18 @@ DEFINE_GUID(AGL_CALLOUT_RECV_V4,
     0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x23);
 DEFINE_GUID(AGL_CALLOUT_RECV_V6,
     0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24);
+DEFINE_GUID(AGL_CALLOUT_FLOW_V4,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x25);
+DEFINE_GUID(AGL_CALLOUT_FLOW_V6,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26);
+DEFINE_GUID(AGL_CALLOUT_CLOSE_V4,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x27);
+DEFINE_GUID(AGL_CALLOUT_CLOSE_V6,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28);
+DEFINE_GUID(AGL_CALLOUT_STREAM_V4,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29);
+DEFINE_GUID(AGL_CALLOUT_STREAM_V6,
+    0x8b2d1c3e, 0x1234, 0x4a2b, 0x9c, 0x3d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A);
 
 static void AglFormatIPv4(UINT32 address, PWCHAR Buffer, USHORT BufferChars)
 {
@@ -102,7 +135,6 @@ static void AglNetworkClassify(
     UINT64 flowContext,
     FWPS_CLASSIFY_OUT* classifyOut)
 {
-    UNREFERENCED_PARAMETER(layerData);
     UNREFERENCED_PARAMETER(classifyContext);
     UNREFERENCED_PARAMETER(flowContext);
     UNREFERENCED_PARAMETER(filter);
@@ -111,9 +143,31 @@ static void AglNetworkClassify(
         classifyOut->actionType = FWP_ACTION_PERMIT;
     }
 
+    if (inFixedValues &&
+        (inFixedValues->layerId == FWPS_LAYER_STREAM_V4 ||
+         inFixedValues->layerId == FWPS_LAYER_STREAM_V6))
+    {
+        FWPS_STREAM_CALLOUT_IO_PACKET0* packet = (FWPS_STREAM_CALLOUT_IO_PACKET0*)layerData;
+        if (packet && packet->streamData)
+        {
+            InterlockedAdd64((LONG64*)&AglStreamBytes, (LONG64)packet->streamData->dataLength);
+            InterlockedIncrement64((LONG64*)&AglStreamPackets);
+            if (flowContext)
+            {
+                BOOLEAN send = (packet->streamData->flags & FWPS_STREAM_FLAG_SEND) != 0;
+                AglContextAddFlowDirectionStats(
+                    flowContext,
+                    send,
+                    (ULONG64)packet->streamData->dataLength,
+                    1);
+            }
+        }
+    }
+
     if (FWPS_IS_METADATA_FIELD_PRESENT(inMetaValues, FWPS_METADATA_FIELD_PROCESS_ID))
     {
         AGL_NETWORK_EVENT event;
+        ULONG eventType = AGL_EVENT_NETWORK_CONNECT;
         UNICODE_STRING remotePath = { 0 };
         WCHAR remotePathBuffer[64];
         RtlZeroMemory(&event, sizeof(event));
@@ -156,8 +210,19 @@ static void AglNetworkClassify(
             event.RemotePort = inFixedValues->incomingValue[FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_IP_REMOTE_PORT].value.uint16;
             event.LocalPort = inFixedValues->incomingValue[FWPS_FIELD_ALE_AUTH_RECV_ACCEPT_V6_IP_LOCAL_PORT].value.uint16;
         }
+        else if (inFixedValues->layerId == FWPS_LAYER_ALE_FLOW_ESTABLISHED_V4 ||
+                 inFixedValues->layerId == FWPS_LAYER_ALE_FLOW_ESTABLISHED_V6)
+        {
+            eventType = AGL_EVENT_NETWORK_FLOW_ESTABLISHED;
+        }
+        else if (inFixedValues->layerId == FWPS_LAYER_ALE_ENDPOINT_CLOSURE_V4 ||
+                 inFixedValues->layerId == FWPS_LAYER_ALE_ENDPOINT_CLOSURE_V6)
+        {
+            eventType = AGL_EVENT_NETWORK_FLOW_CLOSED;
+        }
 
-        if (AglPolicyShouldDeny(
+        if ((eventType == AGL_EVENT_NETWORK_CONNECT) &&
+            AglPolicyShouldDeny(
                 AGL_EVENT_NETWORK_CONNECT,
                 remotePath.Length ? &remotePath : NULL))
         {
@@ -167,7 +232,7 @@ static void AglNetworkClassify(
         }
 
         AglEventEmit(
-            AGL_EVENT_NETWORK_CONNECT,
+            eventType,
             STATUS_SUCCESS,
             (ULONG64)(ULONG_PTR)inMetaValues->processId,
             (ULONG64)(ULONG_PTR)PsGetCurrentThreadId(),
@@ -176,6 +241,17 @@ static void AglNetworkClassify(
             0,
             &event,
             sizeof(event));
+
+        if (flowContext)
+        {
+            AglContextGetOrCreateFlow(
+                flowContext,
+                (ULONG64)(ULONG_PTR)inMetaValues->processId,
+                event.Protocol,
+                (USHORT)event.RemotePort,
+                (USHORT)event.LocalPort,
+                event.RemoteAddress);
+        }
     }
 }
 
@@ -195,9 +271,35 @@ static NTSTATUS AglNetworkFlowDelete(
     UINT32 calloutId,
     UINT64 flowContext)
 {
+    AGL_NET_FLOW_CTX snapshot = { 0 };
+    if (AglContextGetFlowSnapshot(flowContext, &snapshot))
+    {
+        AGL_NETWORK_EVENT event;
+        RtlZeroMemory(&event, sizeof(event));
+        event.Protocol = snapshot.Protocol;
+        event.RemotePort = snapshot.RemotePort;
+        event.LocalPort = snapshot.LocalPort;
+        event.BytesSent = snapshot.SendBytes;
+        event.BytesReceived = snapshot.RecvBytes;
+        event.PacketsSent = snapshot.SendPackets;
+        event.PacketsReceived = snapshot.RecvPackets;
+        RtlCopyMemory(event.RemoteAddress, snapshot.RemoteAddress, 16);
+
+        AglEventEmit(
+            AGL_EVENT_NETWORK_FLOW_CLOSED,
+            STATUS_SUCCESS,
+            snapshot.ProcessId,
+            (ULONG64)(ULONG_PTR)PsGetCurrentThreadId(),
+            0,
+            0,
+            0,
+            &event,
+            sizeof(event));
+    }
+
+    AglContextRemoveFlow(flowContext);
     UNREFERENCED_PARAMETER(layerId);
     UNREFERENCED_PARAMETER(calloutId);
-    UNREFERENCED_PARAMETER(flowContext);
     return STATUS_SUCCESS;
 }
 
@@ -295,6 +397,30 @@ NTSTATUS AglNetworkMonitorInitialize(PDRIVER_OBJECT DriverObject)
     {
         status = AglRegisterCallout(&AGL_CALLOUT_RECV_V6, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, &AglCalloutRecvV6, &AglFilterRecvV6);
     }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_FLOW_V4, &FWPM_LAYER_ALE_FLOW_ESTABLISHED_V4, &AglCalloutFlowV4, &AglFilterFlowV4);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_FLOW_V6, &FWPM_LAYER_ALE_FLOW_ESTABLISHED_V6, &AglCalloutFlowV6, &AglFilterFlowV6);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_CLOSE_V4, &FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V4, &AglCalloutCloseV4, &AglFilterCloseV4);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_CLOSE_V6, &FWPM_LAYER_ALE_ENDPOINT_CLOSURE_V6, &AglCalloutCloseV6, &AglFilterCloseV6);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_STREAM_V4, &FWPM_LAYER_STREAM_V4, &AglCalloutStreamV4, &AglFilterStreamV4);
+    }
+    if (NT_SUCCESS(status))
+    {
+        status = AglRegisterCallout(&AGL_CALLOUT_STREAM_V6, &FWPM_LAYER_STREAM_V6, &AglCalloutStreamV6, &AglFilterStreamV6);
+    }
 
     if (NT_SUCCESS(status))
     {
@@ -312,6 +438,12 @@ NTSTATUS AglNetworkMonitorInitialize(PDRIVER_OBJECT DriverObject)
         if (AglCalloutConnectV6) FwpsCalloutUnregisterById(AglCalloutConnectV6);
         if (AglCalloutRecvV4) FwpsCalloutUnregisterById(AglCalloutRecvV4);
         if (AglCalloutRecvV6) FwpsCalloutUnregisterById(AglCalloutRecvV6);
+        if (AglCalloutFlowV4) FwpsCalloutUnregisterById(AglCalloutFlowV4);
+        if (AglCalloutFlowV6) FwpsCalloutUnregisterById(AglCalloutFlowV6);
+        if (AglCalloutCloseV4) FwpsCalloutUnregisterById(AglCalloutCloseV4);
+        if (AglCalloutCloseV6) FwpsCalloutUnregisterById(AglCalloutCloseV6);
+        if (AglCalloutStreamV4) FwpsCalloutUnregisterById(AglCalloutStreamV4);
+        if (AglCalloutStreamV6) FwpsCalloutUnregisterById(AglCalloutStreamV6);
         FwpmEngineClose0(AglWfpEngine);
         AglWfpEngine = NULL;
         return status;
@@ -327,10 +459,22 @@ void AglNetworkMonitorUninitialize(void)
     if (AglCalloutConnectV6) FwpsCalloutUnregisterById(AglCalloutConnectV6);
     if (AglCalloutRecvV4) FwpsCalloutUnregisterById(AglCalloutRecvV4);
     if (AglCalloutRecvV6) FwpsCalloutUnregisterById(AglCalloutRecvV6);
+    if (AglCalloutFlowV4) FwpsCalloutUnregisterById(AglCalloutFlowV4);
+    if (AglCalloutFlowV6) FwpsCalloutUnregisterById(AglCalloutFlowV6);
+    if (AglCalloutCloseV4) FwpsCalloutUnregisterById(AglCalloutCloseV4);
+    if (AglCalloutCloseV6) FwpsCalloutUnregisterById(AglCalloutCloseV6);
+    if (AglCalloutStreamV4) FwpsCalloutUnregisterById(AglCalloutStreamV4);
+    if (AglCalloutStreamV6) FwpsCalloutUnregisterById(AglCalloutStreamV6);
     AglCalloutConnectV4 = 0;
     AglCalloutConnectV6 = 0;
     AglCalloutRecvV4 = 0;
     AglCalloutRecvV6 = 0;
+    AglCalloutFlowV4 = 0;
+    AglCalloutFlowV6 = 0;
+    AglCalloutCloseV4 = 0;
+    AglCalloutCloseV6 = 0;
+    AglCalloutStreamV4 = 0;
+    AglCalloutStreamV6 = 0;
 
     if (AglWfpEngine)
     {

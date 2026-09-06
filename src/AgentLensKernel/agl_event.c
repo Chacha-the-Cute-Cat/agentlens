@@ -2,6 +2,7 @@
 #include "agl_event_ring.h"
 #include "agl_context.h"
 #include "agl_util.h"
+#include "agl_etw.h"
 
 static volatile LONG AglSampleCounter = 0;
 
@@ -12,6 +13,20 @@ static BOOLEAN AglShouldSampleEvent(ULONG EventType)
         return (InterlockedIncrement(&AglSampleCounter) % 10) != 0;
     }
     return FALSE;
+}
+
+static ULONG AglEventFlags(ULONG EventType)
+{
+    if (EventType == AGL_EVENT_PROCESS_CREATE ||
+        EventType == AGL_EVENT_PROCESS_EXIT ||
+        EventType == AGL_EVENT_REGISTRY_SET_VALUE ||
+        EventType == AGL_EVENT_REGISTRY_DELETE_KEY ||
+        EventType == AGL_EVENT_REGISTRY_DELETE_VALUE ||
+        EventType == AGL_EVENT_NETWORK_CONNECT)
+    {
+        return AGL_EVENT_FLAG_CRITICAL;
+    }
+    return 0;
 }
 
 static ULONG64 AglNow(void)
@@ -57,6 +72,7 @@ NTSTATUS AglEventEmit(
 
     recordHeader = (AGL_RING_RECORD_HEADER*)buffer;
     recordHeader->RecordLength = recordLength;
+    recordHeader->Flags = 0;
     recordHeader->Reserved = 0;
 
     if (CorrelationId == 0 && ProcessId != 0)
@@ -77,7 +93,9 @@ NTSTATUS AglEventEmit(
     header->ParentProcessId = ParentProcessId;
     header->CorrelationId = CorrelationId ? CorrelationId : header->Sequence;
     header->SessionId = SessionId;
+    header->Flags = AglEventFlags(EventType);
     header->PayloadLength = PayloadLength;
+    recordHeader->Flags = header->Flags;
 
     if (Payload && PayloadLength)
     {
@@ -88,6 +106,10 @@ NTSTATUS AglEventEmit(
     }
 
     status = AglEventRingWrite(buffer, recordLength);
+    if (NT_SUCCESS(status))
+    {
+        AglEtwWriteEvent(header, Payload, PayloadLength);
+    }
     AglFree(buffer);
     return status;
 }

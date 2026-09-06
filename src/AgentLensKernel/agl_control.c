@@ -2,6 +2,7 @@
 #include "agl_event_ring.h"
 #include "agl_context.h"
 #include "agl_policy.h"
+#include "agl_monitors.h"
 #include "agl_util.h"
 #include "agl_trace.h"
 #include "AgentLensProtocol/agl_control.h"
@@ -218,7 +219,7 @@ static NTSTATUS AglHandleDeviceControl(
         {
             return STATUS_BUFFER_TOO_SMALL;
         }
-        ctx = AglContextAcquireProcess(query->ProcessId);
+        ctx = AglContextAcquireProcessValidated(query->ProcessId);
         if (!ctx)
         {
             return STATUS_NOT_FOUND;
@@ -252,6 +253,53 @@ static NTSTATUS AglHandleDeviceControl(
     case AGL_OP_CLEAR_POLICY:
         AglPolicyClear();
         return STATUS_SUCCESS;
+
+    case AGL_OP_UPDATE_CONTEXT:
+    {
+        AGL_CONTEXT_UPDATE* update = (AGL_CONTEXT_UPDATE*)((PUCHAR)systemBuffer + header->StructSize);
+        UNICODE_STRING cwd;
+
+        if (inputLength < header->StructSize + sizeof(AGL_CONTEXT_UPDATE) ||
+            update->CurrentDirectoryLength > AGL_MAX_PATH_CHARS * sizeof(WCHAR))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        cwd.Buffer = update->Data;
+        cwd.Length = (USHORT)update->CurrentDirectoryLength;
+        cwd.MaximumLength = cwd.Length + sizeof(WCHAR);
+        AglContextUpdateProcess(update->ProcessId, update->EnvironmentHash, &cwd);
+        return STATUS_SUCCESS;
+    }
+
+    case AGL_OP_GET_STREAM_STATS:
+    {
+        AGL_STREAM_STATS stats;
+        if (outputLength < sizeof(stats))
+        {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        AglNetworkGetStreamStats(&stats.Bytes, &stats.Packets);
+        RtlCopyMemory(systemBuffer, &stats, sizeof(stats));
+        *Information = sizeof(stats);
+        return STATUS_SUCCESS;
+    }
+
+    case AGL_OP_UPDATE_IMAGE_CONTEXT:
+    {
+        AGL_IMAGE_UPDATE* update = (AGL_IMAGE_UPDATE*)((PUCHAR)systemBuffer + header->StructSize);
+        if (inputLength < header->StructSize + sizeof(AGL_IMAGE_UPDATE))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        AglContextUpdateImage(
+            update->ProcessId,
+            update->ImageBase,
+            update->PathHash,
+            update->FileSha256,
+            update->SignerState);
+        return STATUS_SUCCESS;
+    }
     }
 
     return STATUS_NOT_SUPPORTED;

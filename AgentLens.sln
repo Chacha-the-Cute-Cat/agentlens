@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AgentLensAgent", "src\Agent
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AgentLensTools", "src\AgentLensTools\AgentLensTools.vcxproj", "{7A3D2C1E-1111-4A2B-9C3D-000000000004}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AgentLensEtw", "src\AgentLensEtw\AgentLensEtw.vcxproj", "{7A3D2C1E-1111-4A2B-9C3D-000000000007}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -33,6 +35,10 @@ Global
 		{7A3D2C1E-1111-4A2B-9C3D-000000000004}.Debug|x64.Build.0 = Debug|x64
 		{7A3D2C1E-1111-4A2B-9C3D-000000000004}.Release|x64.ActiveCfg = Release|x64
 		{7A3D2C1E-1111-4A2B-9C3D-000000000004}.Release|x64.Build.0 = Release|x64
+		{7A3D2C1E-1111-4A2B-9C3D-000000000007}.Debug|x64.ActiveCfg = Debug|x64
+		{7A3D2C1E-1111-4A2B-9C3D-000000000007}.Debug|x64.Build.0 = Debug|x64
+		{7A3D2C1E-1111-4A2B-9C3D-000000000007}.Release|x64.ActiveCfg = Release|x64
+		{7A3D2C1E-1111-4A2B-9C3D-000000000007}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

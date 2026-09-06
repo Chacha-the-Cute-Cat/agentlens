@@ -19,13 +19,20 @@ typedef enum _AGL_EVENT_TYPE {
     AGL_EVENT_FILE_WRITE,
     AGL_EVENT_FILE_DELETE,
     AGL_EVENT_FILE_CLOSE,
+    AGL_EVENT_FILE_QUERY,
+    AGL_EVENT_FILE_SECURITY,
+    AGL_EVENT_FILE_DIRECTORY,
     AGL_EVENT_REGISTRY_OPEN,
     AGL_EVENT_REGISTRY_QUERY,
     AGL_EVENT_REGISTRY_SET_VALUE,
+    AGL_EVENT_REGISTRY_ENUM_KEY,
+    AGL_EVENT_REGISTRY_ENUM_VALUE,
     AGL_EVENT_REGISTRY_DELETE_KEY,
     AGL_EVENT_REGISTRY_DELETE_VALUE,
     AGL_EVENT_OBJECT_HANDLE,
     AGL_EVENT_NETWORK_CONNECT,
+    AGL_EVENT_NETWORK_FLOW_ESTABLISHED,
+    AGL_EVENT_NETWORK_FLOW_CLOSED,
     AGL_EVENT_POLICY_DENY,
     AGL_EVENT_MAX
 } AGL_EVENT_TYPE;
@@ -35,6 +42,7 @@ typedef enum _AGL_EVENT_TYPE {
 
 typedef struct _AGL_RING_RECORD_HEADER {
     unsigned long RecordLength; // total bytes, including this header
+    unsigned long Flags;
     unsigned long Reserved;
 } AGL_RING_RECORD_HEADER;
 
@@ -61,8 +69,11 @@ typedef struct _AGL_EVENT_HEADER {
     unsigned long long ParentProcessId;
     unsigned long long CorrelationId;
     unsigned long      SessionId;
+    unsigned long      Flags;
     unsigned long      PayloadLength;
 } AGL_EVENT_HEADER;
+
+#define AGL_EVENT_FLAG_CRITICAL 0x00000001
 
 typedef struct _AGL_PROCESS_EVENT {
     AGL_EVENT_HEADER Header;
@@ -94,6 +105,9 @@ typedef struct _AGL_FILE_EVENT {
     unsigned long CreateDisposition;
     unsigned long long Offset;
     unsigned long Length;
+    unsigned long SecurityInformation;
+    unsigned long InfoClass;
+    unsigned long NameLength;
     unsigned long PathLength;
     wchar_t       Data[1];
 } AGL_FILE_EVENT;
@@ -103,6 +117,10 @@ typedef struct _AGL_REGISTRY_EVENT {
     unsigned long DesiredAccess;
     unsigned long ValueType;
     unsigned long ValueLength;
+    unsigned long ValueHash;
+    unsigned long Flags;
+    unsigned long Index;
+    unsigned long InfoClass;
     unsigned long PathLength;
     wchar_t       Data[1];
 } AGL_REGISTRY_EVENT;
@@ -120,6 +138,10 @@ typedef struct _AGL_NETWORK_EVENT {
     unsigned long Protocol;
     unsigned long RemotePort;
     unsigned long LocalPort;
+    unsigned long long BytesSent;
+    unsigned long long BytesReceived;
+    unsigned long long PacketsSent;
+    unsigned long long PacketsReceived;
     unsigned char  RemoteAddress[16];
     unsigned char  LocalAddress[16];
 } AGL_NETWORK_EVENT;

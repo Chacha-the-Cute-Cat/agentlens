@@ -81,9 +81,14 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
     {
         ULONG eventType = 0;
         ULONG action = 0;
+        ULONG ruleSet = 0;
         ULONG priority = 0;
+        ULONG accessMask = 0;
+        ULONG imageHash = 0;
+        ULONG userSidHash = 0;
         std::wstring path;
         std::wstring process;
+        std::wstring commandLine;
     };
 
     std::vector<Rule> rules;
@@ -126,6 +131,20 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
             continue;
         }
 
+        if (trimmed.find(L"log ") == 0)
+        {
+            Rule rule;
+            rule.action = 2;
+            if (!ParseEventType(Trim(trimmed.substr(4)), rule.eventType))
+            {
+                error = L"Line " + std::to_wstring(lineNumber) + L": unknown event type.";
+                return false;
+            }
+            rules.push_back(rule);
+            current = &rules.back();
+            continue;
+        }
+
         if (trimmed.find(L"allow ") == 0)
         {
             Rule rule;
@@ -159,6 +178,26 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
                 {
                     current->priority = static_cast<ULONG>(_wtoi(value.c_str()));
                 }
+                else if (key == L"ruleset")
+                {
+                    current->ruleSet = static_cast<ULONG>(_wtoi(value.c_str()));
+                }
+                else if (key == L"access")
+                {
+                    current->accessMask = static_cast<ULONG>(wcstoul(value.c_str(), nullptr, 0));
+                }
+                else if (key == L"imagehash")
+                {
+                    current->imageHash = static_cast<ULONG>(wcstoul(value.c_str(), nullptr, 0));
+                }
+                else if (key == L"sidhash")
+                {
+                    current->userSidHash = static_cast<ULONG>(wcstoul(value.c_str(), nullptr, 0));
+                }
+                else if (key == L"command")
+                {
+                    current->commandLine = value;
+                }
                 else
                 {
                     error = L"Line " + std::to_wstring(lineNumber) + L": unknown attribute '" + key + L"'.";
@@ -178,7 +217,8 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
         payloadLength += static_cast<ULONG>(
             sizeof(AGL_POLICY_RULE) +
             rule.path.size() * sizeof(wchar_t) +
-            rule.process.size() * sizeof(wchar_t));
+            rule.process.size() * sizeof(wchar_t) +
+            rule.commandLine.size() * sizeof(wchar_t));
     }
 
     binaryPolicy.resize(sizeof(AGL_POLICY_HEADER) + payloadLength);
@@ -194,13 +234,18 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
     {
         ULONG pathBytes = static_cast<ULONG>(rule.path.size() * sizeof(wchar_t));
         ULONG processBytes = static_cast<ULONG>(rule.process.size() * sizeof(wchar_t));
+        ULONG commandBytes = static_cast<ULONG>(rule.commandLine.size() * sizeof(wchar_t));
         auto* out = reinterpret_cast<AGL_POLICY_RULE*>(cursor);
         out->EventType = rule.eventType;
         out->Action = rule.action;
+        out->RuleSet = rule.ruleSet;
         out->Priority = rule.priority;
-        out->AccessMask = 0;
+        out->AccessMask = rule.accessMask;
+        out->ImageHash = rule.imageHash;
+        out->UserSidHash = rule.userSidHash;
         out->PathLength = pathBytes;
         out->ProcessLength = processBytes;
+        out->CommandLineLength = commandBytes;
         if (pathBytes)
         {
             memcpy(out->Data, rule.path.c_str(), pathBytes);
@@ -209,7 +254,11 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
         {
             memcpy(out->Data + pathBytes / sizeof(wchar_t), rule.process.c_str(), processBytes);
         }
-        cursor += sizeof(AGL_POLICY_RULE) + pathBytes + processBytes;
+        if (commandBytes)
+        {
+            memcpy(out->Data + (pathBytes + processBytes) / sizeof(wchar_t), rule.commandLine.c_str(), commandBytes);
+        }
+        cursor += sizeof(AGL_POLICY_RULE) + pathBytes + processBytes + commandBytes;
     }
 
     return true;

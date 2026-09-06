@@ -119,7 +119,7 @@ bool ControlClient::Unsubscribe()
 
 bool ControlClient::ReadEvents(std::vector<uint8_t>& events)
 {
-    events.resize(64 * 1024);
+    events.resize(256 * 1024);
     ULONG returned = 0;
     if (!Call(AGL_OP_READ_EVENTS, nullptr, 0, events.data(), static_cast<ULONG>(events.size()), returned))
     {

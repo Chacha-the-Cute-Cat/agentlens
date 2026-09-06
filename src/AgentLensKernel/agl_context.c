@@ -1,4 +1,6 @@
+#include <ntifs.h>
 #include "agl_context.h"
+#include "agl_control.h"
 #include "agl_util.h"
 #include "agl_trace.h"
 
@@ -10,6 +12,7 @@ void AglContextInitialize(void)
     InitializeListHead(&AglContext.ProcessList);
     InitializeListHead(&AglContext.ThreadList);
     InitializeListHead(&AglContext.ImageList);
+    InitializeListHead(&AglContext.FlowList);
     AglContext.NextCorrelationId = 1;
 }
 
@@ -48,7 +51,29 @@ void AglContextDestroy(void)
         entry = next;
     }
     AglContext.ImageCount = 0;
+
+    entry = AglContext.FlowList.Flink;
+    while (entry != &AglContext.FlowList)
+    {
+        next = entry->Flink;
+        RemoveEntryList(entry);
+        AglFree(CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry));
+        entry = next;
+    }
+    AglContext.FlowCount = 0;
     KeReleaseInStackQueuedSpinLock(&lockHandle);
+}
+
+void AglContextFlushTombstones(void)
+{
+    LARGE_INTEGER delay;
+    ULONG i;
+
+    delay.QuadPart = -10 * 1000; // 10 ms
+    for (i = 0; i < 1000 && AglContext.PendingTombstones != 0; i++)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    }
 }
 
 static void AglFreeProcessCtx(AGL_PROCESS_CTX* Ctx)
@@ -61,7 +86,49 @@ static void AglFreeProcessCtx(AGL_PROCESS_CTX* Ctx)
     AglFreeUnicodeString(&Ctx->ImagePath);
     AglFreeUnicodeString(&Ctx->ImageName);
     AglFreeUnicodeString(&Ctx->CommandLine);
+    AglFreeUnicodeString(&Ctx->CurrentDirectory);
     AglFree(Ctx);
+}
+
+static VOID AglTombstoneWorker(PDEVICE_OBJECT DeviceObject, PVOID Context)
+{
+    AGL_PROCESS_CTX* ctx = (AGL_PROCESS_CTX*)Context;
+    LARGE_INTEGER delay;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    delay.QuadPart = -5 * 1000 * 1000 * 10; // 5 seconds
+    KeDelayExecutionThread(KernelMode, FALSE, &delay);
+
+    if (ctx->WorkItem)
+    {
+        IoFreeWorkItem(ctx->WorkItem);
+        ctx->WorkItem = NULL;
+    }
+    AglFreeProcessCtx(ctx);
+    InterlockedDecrement(&AglContext.PendingTombstones);
+}
+
+static VOID AglQueueTombstone(AGL_PROCESS_CTX* Ctx)
+{
+    PIO_WORKITEM workItem;
+
+    if (InterlockedCompareExchange(&Ctx->TombstoneQueued, 1, 0) != 0)
+    {
+        return;
+    }
+
+    workItem = IoAllocateWorkItem(AglControlGetDevice());
+    if (!workItem)
+    {
+        InterlockedExchange(&Ctx->TombstoneQueued, 0);
+        AglFreeProcessCtx(Ctx);
+        return;
+    }
+
+    Ctx->WorkItem = workItem;
+    InterlockedIncrement(&AglContext.PendingTombstones);
+    IoQueueWorkItem(workItem, AglTombstoneWorker, DelayedWorkQueue, Ctx);
 }
 
 AGL_PROCESS_CTX* AglContextAcquireProcess(ULONG64 ProcessId)
@@ -87,6 +154,32 @@ AGL_PROCESS_CTX* AglContextAcquireProcess(ULONG64 ProcessId)
     return ctx;
 }
 
+AGL_PROCESS_CTX* AglContextAcquireProcessValidated(ULONG64 ProcessId)
+{
+    PEPROCESS processObject = NULL;
+    ULONG64 createTime = 0;
+    AGL_PROCESS_CTX* ctx;
+    NTSTATUS status;
+
+    status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)ProcessId, &processObject);
+    if (!NT_SUCCESS(status))
+    {
+        return NULL;
+    }
+
+    createTime = (ULONG64)PsGetProcessCreateTimeQuadPart(processObject);
+    ObDereferenceObject(processObject);
+
+    ctx = AglContextAcquireProcess(ProcessId);
+    if (ctx && ctx->CreateTime != createTime)
+    {
+        AglContextReleaseProcess(ctx);
+        return NULL;
+    }
+
+    return ctx;
+}
+
 void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
@@ -103,7 +196,14 @@ void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx)
 
     if (refs == 0)
     {
-        AglFreeProcessCtx(Ctx);
+        if (Ctx->Tombstoned)
+        {
+            AglQueueTombstone(Ctx);
+        }
+        else
+        {
+            AglFreeProcessCtx(Ctx);
+        }
     }
 }
 
@@ -170,6 +270,7 @@ void AglContextRemoveProcess(ULONG64 ProcessId)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
     PLIST_ENTRY entry;
+    AGL_PROCESS_CTX* itemToQueue = NULL;
 
     KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
     for (entry = AglContext.ProcessList.Flink;
@@ -181,16 +282,38 @@ void AglContextRemoveProcess(ULONG64 ProcessId)
         {
             RemoveEntryList(entry);
             AglContext.ProcessCount--;
+            item->Tombstoned = TRUE;
+            {
+                LARGE_INTEGER systemTime;
+                KeQuerySystemTime(&systemTime);
+                item->ExitTime = (ULONG64)systemTime.QuadPart;
+            }
             if (InterlockedDecrement(&item->RefCount) == 0)
             {
-                KeReleaseInStackQueuedSpinLock(&lockHandle);
-                AglFreeProcessCtx(item);
-                return;
+                itemToQueue = item;
             }
             break;
         }
     }
     KeReleaseInStackQueuedSpinLock(&lockHandle);
+
+    if (itemToQueue)
+    {
+        AglQueueTombstone(itemToQueue);
+    }
+}
+
+void AglContextUpdateProcess(ULONG64 ProcessId, ULONG EnvironmentHash, PCUNICODE_STRING CurrentDirectory)
+{
+    AGL_PROCESS_CTX* ctx = AglContextAcquireProcess(ProcessId);
+
+    if (ctx)
+    {
+        ctx->EnvironmentHash = EnvironmentHash;
+        AglFreeUnicodeString(&ctx->CurrentDirectory);
+        AglCopyUnicodeString(CurrentDirectory, &ctx->CurrentDirectory, NonPagedPool);
+        AglContextReleaseProcess(ctx);
+    }
 }
 
 ULONG64 AglContextNextCorrelationId(void)
@@ -304,6 +427,7 @@ AGL_IMAGE_CTX* AglContextGetOrCreateImage(
             ctx->ProcessId = ProcessId;
             ctx->ImageBase = ImageBase;
             ctx->ImageSize = ImageSize;
+            ctx->FileSize = ImageSize;
             ctx->PathHash = PathHash;
             InsertTailList(&AglContext.ImageList, &ctx->ListEntry);
             AglContext.ImageCount++;
@@ -312,4 +436,186 @@ AGL_IMAGE_CTX* AglContextGetOrCreateImage(
 
     KeReleaseInStackQueuedSpinLock(&lockHandle);
     return ctx;
+}
+
+void AglContextUpdateImage(
+    ULONG64 ProcessId,
+    ULONG64 ImageBase,
+    ULONG PathHash,
+    PUCHAR FileSha256,
+    ULONG SignerState)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.ImageList.Flink;
+         entry != &AglContext.ImageList;
+         entry = entry->Flink)
+    {
+        AGL_IMAGE_CTX* item = CONTAINING_RECORD(entry, AGL_IMAGE_CTX, ListEntry);
+        if (item->ProcessId == ProcessId && item->ImageBase == ImageBase)
+        {
+            item->PathHash = PathHash;
+            item->SignerState = SignerState;
+            if (FileSha256)
+            {
+                RtlCopyMemory(item->FileSha256, FileSha256, 32);
+                item->FileHashValid = TRUE;
+            }
+            break;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+}
+
+AGL_NET_FLOW_CTX* AglContextGetOrCreateFlow(
+    ULONG64 FlowId,
+    ULONG64 ProcessId,
+    ULONG Protocol,
+    USHORT RemotePort,
+    USHORT LocalPort,
+    const UCHAR* RemoteAddress)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+    AGL_NET_FLOW_CTX* ctx = NULL;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.FlowList.Flink;
+         entry != &AglContext.FlowList;
+         entry = entry->Flink)
+    {
+        AGL_NET_FLOW_CTX* item = CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry);
+        if (item->FlowId == FlowId)
+        {
+            ctx = item;
+            break;
+        }
+    }
+
+    if (!ctx)
+    {
+        ctx = AglAllocNonPaged(sizeof(*ctx));
+        if (ctx)
+        {
+            RtlZeroMemory(ctx, sizeof(*ctx));
+            ctx->FlowId = FlowId;
+            ctx->ProcessId = ProcessId;
+            ctx->Protocol = Protocol;
+            ctx->RemotePort = RemotePort;
+            ctx->LocalPort = LocalPort;
+            if (RemoteAddress)
+            {
+                RtlCopyMemory(ctx->RemoteAddress, RemoteAddress, 16);
+            }
+            InsertTailList(&AglContext.FlowList, &ctx->ListEntry);
+            AglContext.FlowCount++;
+        }
+    }
+
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+    return ctx;
+}
+
+void AglContextRemoveFlow(ULONG64 FlowId)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.FlowList.Flink;
+         entry != &AglContext.FlowList;
+         entry = entry->Flink)
+    {
+        AGL_NET_FLOW_CTX* item = CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry);
+        if (item->FlowId == FlowId)
+        {
+            RemoveEntryList(entry);
+            AglContext.FlowCount--;
+            KeReleaseInStackQueuedSpinLock(&lockHandle);
+            AglFree(item);
+            return;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+}
+
+void AglContextAddFlowStats(ULONG64 FlowId, ULONG64 Bytes, ULONG64 Packets)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.FlowList.Flink;
+         entry != &AglContext.FlowList;
+         entry = entry->Flink)
+    {
+        AGL_NET_FLOW_CTX* item = CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry);
+        if (item->FlowId == FlowId)
+        {
+            item->Bytes += Bytes;
+            item->Packets += Packets;
+            break;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+}
+
+void AglContextAddFlowDirectionStats(
+    ULONG64 FlowId,
+    BOOLEAN Send,
+    ULONG64 Bytes,
+    ULONG64 Packets)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.FlowList.Flink;
+         entry != &AglContext.FlowList;
+         entry = entry->Flink)
+    {
+        AGL_NET_FLOW_CTX* item = CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry);
+        if (item->FlowId == FlowId)
+        {
+            item->Bytes += Bytes;
+            item->Packets += Packets;
+            if (Send)
+            {
+                item->SendBytes += Bytes;
+                item->SendPackets += Packets;
+            }
+            else
+            {
+                item->RecvBytes += Bytes;
+                item->RecvPackets += Packets;
+            }
+            break;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+}
+
+BOOLEAN AglContextGetFlowSnapshot(ULONG64 FlowId, AGL_NET_FLOW_CTX* Out)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+    BOOLEAN found = FALSE;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.FlowList.Flink;
+         entry != &AglContext.FlowList;
+         entry = entry->Flink)
+    {
+        AGL_NET_FLOW_CTX* item = CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry);
+        if (item->FlowId == FlowId)
+        {
+            RtlCopyMemory(Out, item, sizeof(*Out));
+            found = TRUE;
+            break;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+    return found;
 }

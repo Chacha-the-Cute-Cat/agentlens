@@ -64,6 +64,7 @@
     <ClCompile Include="agl_control.c" />
     <ClCompile Include="agl_event.c" />
     <ClCompile Include="agl_event_ring.c" />
+    <ClCompile Include="agl_etw.c" />
     <ClCompile Include="agl_file_monitor.c" />
     <ClCompile Include="agl_image_monitor.c" />
     <ClCompile Include="agl_network_monitor.c" />
@@ -81,6 +82,7 @@
     <ClInclude Include="agl_control.h" />
     <ClInclude Include="agl_event.h" />
     <ClInclude Include="agl_event_ring.h" />
+    <ClInclude Include="agl_etw.h" />
     <ClInclude Include="agl_monitors.h" />
     <ClInclude Include="agl_policy.h" />
     <ClInclude Include="agl_trace.h" />

@@ -1,6 +1,7 @@
 #include "service.h"
 #include "control_client.h"
 #include "event_reader.h"
+#include "dns_associator.h"
 #include "policy_loader.h"
 #include "config.h"
 #include "logger.h"
@@ -11,6 +12,16 @@
 
 static SERVICE_STATUS_HANDLE g_statusHandle = nullptr;
 static SERVICE_STATUS g_status{};
+static FILE* g_eventOutput = nullptr;
+static unsigned long long g_filterPid = 0;
+static unsigned long g_filterType = 0;
+
+void SetEventOptions(FILE* output, unsigned long long filterPid, unsigned long filterType)
+{
+    g_eventOutput = output;
+    g_filterPid = filterPid;
+    g_filterType = filterType;
+}
 
 static void UpdateStatus(DWORD state, DWORD exitCode, DWORD waitHint)
 {
@@ -80,6 +91,8 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
     client.Subscribe(0, 0);
     EventReader reader(client);
     std::vector<BYTE> buffer;
+    DnsAssociator dns;
+    dns.Start();
 
     UpdateStatus(SERVICE_RUNNING, NO_ERROR, 0);
 
@@ -92,7 +105,7 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
         }
         if (!buffer.empty())
         {
-            reader.PrintJsonEvents(buffer);
+            reader.PrintJsonEvents(buffer, g_eventOutput, g_filterPid, g_filterType, &dns);
         }
     }
 }
@@ -127,6 +140,8 @@ int RunConsole()
     client.Subscribe(0, 0);
     EventReader reader(client);
     std::vector<BYTE> buffer;
+    DnsAssociator dns;
+    dns.Start();
 
     while (true)
     {
@@ -137,7 +152,7 @@ int RunConsole()
         }
         if (!buffer.empty())
         {
-            reader.PrintJsonEvents(buffer);
+            reader.PrintJsonEvents(buffer, g_eventOutput, g_filterPid, g_filterType, &dns);
         }
     }
 }

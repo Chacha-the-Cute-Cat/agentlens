@@ -3,6 +3,7 @@
 #include "agl_util.h"
 #include "agl_context.h"
 #include "agl_event_ring.h"
+#include "agl_etw.h"
 #include "agl_policy.h"
 #include "agl_control.h"
 #include "agl_monitors.h"
@@ -33,6 +34,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
     AglContextInitialize();
     AglPolicyInitialize();
+    AglEtwInitialize();
 
     status = AglEventRingInitialize(1024 * 1024);
     if (!NT_SUCCESS(status))
@@ -113,6 +115,8 @@ Exit:
     if (AglControlInit) AglControlUninitialize(DriverObject);
     if (AglEventInit) AglEventRingDestroy();
     AglPolicyUninitialize();
+    AglEtwUninitialize();
+    AglContextFlushTombstones();
     AglContextDestroy();
     return status;
 }
@@ -168,6 +172,7 @@ void AglDriverUnload(PDRIVER_OBJECT DriverObject)
     }
 
     AglPolicyUninitialize();
+    AglContextFlushTombstones();
     AglContextDestroy();
     AglTraceInfo("AgentLensKernel unloaded.\n");
 }

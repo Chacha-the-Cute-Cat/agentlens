@@ -17,6 +17,7 @@ typedef struct _AGL_EVENT_RING {
     ULONG64    Written;
     ULONG64    Read;
     ULONG64    Dropped;
+    ULONG64    CriticalDropped;
     ULONG      ActiveSubscribers;
 } AGL_EVENT_RING;
 

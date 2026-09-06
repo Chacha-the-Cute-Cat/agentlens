@@ -13,7 +13,13 @@ typedef struct _AGL_PROCESS_CTX {
     ULONG64 AgentSessionId;
     ULONG64 ExitTime;
     PVOID   TokenSnapshot;
+    ULONG   TokenSidHash;
+    ULONG   TokenIntegrityLevel;
+    ULONG   TokenPrivilegeHash;
+    BOOLEAN TokenSnapshotValid;
     BOOLEAN Tombstoned;
+    volatile LONG TombstoneQueued;
+    PIO_WORKITEM WorkItem;
     ULONG   SessionId;
     ULONG   Flags;
     LONG    RefCount;
@@ -21,6 +27,8 @@ typedef struct _AGL_PROCESS_CTX {
     UNICODE_STRING ImagePath;
     UNICODE_STRING ImageName;
     UNICODE_STRING CommandLine;
+    UNICODE_STRING CurrentDirectory;
+    ULONG EnvironmentHash;
 } AGL_PROCESS_CTX;
 
 typedef struct _AGL_THREAD_CTX {
@@ -36,9 +44,28 @@ typedef struct _AGL_IMAGE_CTX {
     ULONG64 ProcessId;
     ULONG64 ImageBase;
     ULONG   ImageSize;
+    ULONG64 FileSize;
     ULONG   PathHash;
     ULONG   SignerState;
+    UCHAR   FileSha256[32];
+    BOOLEAN FileHashValid;
 } AGL_IMAGE_CTX;
+
+typedef struct _AGL_NET_FLOW_CTX {
+    LIST_ENTRY ListEntry;
+    ULONG64 FlowId;
+    ULONG64 ProcessId;
+    ULONG   Protocol;
+    USHORT  RemotePort;
+    USHORT  LocalPort;
+    UCHAR   RemoteAddress[16];
+    ULONG64 Bytes;
+    ULONG64 Packets;
+    ULONG64 SendBytes;
+    ULONG64 RecvBytes;
+    ULONG64 SendPackets;
+    ULONG64 RecvPackets;
+} AGL_NET_FLOW_CTX;
 
 typedef struct _AGL_CONTEXT_MANAGER {
     KSPIN_LOCK Lock;
@@ -48,15 +75,20 @@ typedef struct _AGL_CONTEXT_MANAGER {
     ULONG      ThreadCount;
     LIST_ENTRY ImageList;
     ULONG      ImageCount;
+    LIST_ENTRY FlowList;
+    ULONG      FlowCount;
     ULONG64    NextCorrelationId;
+    volatile LONG PendingTombstones;
 } AGL_CONTEXT_MANAGER;
 
 extern AGL_CONTEXT_MANAGER AglContext;
 
 void AglContextInitialize(void);
 void AglContextDestroy(void);
+void AglContextFlushTombstones(void);
 
 AGL_PROCESS_CTX* AglContextAcquireProcess(ULONG64 ProcessId);
+AGL_PROCESS_CTX* AglContextAcquireProcessValidated(ULONG64 ProcessId);
 void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx);
 
 AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
@@ -71,6 +103,7 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
     PCUNICODE_STRING CommandLine);
 
 void AglContextRemoveProcess(ULONG64 ProcessId);
+void AglContextUpdateProcess(ULONG64 ProcessId, ULONG EnvironmentHash, PCUNICODE_STRING CurrentDirectory);
 ULONG64 AglContextNextCorrelationId(void);
 ULONG64 AglContextGetCorrelationId(ULONG64 ProcessId);
 
@@ -82,3 +115,25 @@ AGL_IMAGE_CTX* AglContextGetOrCreateImage(
     ULONG64 ImageBase,
     ULONG ImageSize,
     ULONG PathHash);
+void AglContextUpdateImage(
+    ULONG64 ProcessId,
+    ULONG64 ImageBase,
+    ULONG PathHash,
+    PUCHAR FileSha256,
+    ULONG SignerState);
+
+AGL_NET_FLOW_CTX* AglContextGetOrCreateFlow(
+    ULONG64 FlowId,
+    ULONG64 ProcessId,
+    ULONG Protocol,
+    USHORT RemotePort,
+    USHORT LocalPort,
+    const UCHAR* RemoteAddress);
+void AglContextRemoveFlow(ULONG64 FlowId);
+void AglContextAddFlowStats(ULONG64 FlowId, ULONG64 Bytes, ULONG64 Packets);
+void AglContextAddFlowDirectionStats(
+    ULONG64 FlowId,
+    BOOLEAN Send,
+    ULONG64 Bytes,
+    ULONG64 Packets);
+BOOLEAN AglContextGetFlowSnapshot(ULONG64 FlowId, AGL_NET_FLOW_CTX* Out);
