@@ -11,6 +11,8 @@ src/*/build/
 *.log
 
 .vs/
+.codex-ppt/
+.codex-finalizer/
 *.vsidx
 *.suo
 *.user
