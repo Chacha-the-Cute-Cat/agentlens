@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include "AgentLensProtocol/agl_control.h"
+#include "AgentLensProtocol/agl_policy.h"
 #include "policy_compiler.h"
 
 static void PrintUsage()
@@ -24,6 +25,7 @@ static void PrintUsage()
     wprintf(L"  --driver-restart\n");
     wprintf(L"  --selftest\n");
     wprintf(L"  --fuzz-ioctl <count>\n");
+    wprintf(L"  --fuzz-policy <count>\n");
     wprintf(L"  --stream-stats\n");
 }
 
@@ -138,21 +140,122 @@ static void RunFuzzIoctl(HANDLE device, ULONG count)
         {
             buffer[j] = static_cast<uint8_t>(rand());
         }
-        if (!DeviceIoControl(
-                device,
-                AGL_CONTROL_IOCTL,
-                buffer.data(),
-                len,
-                buffer.data(),
-                static_cast<DWORD>(buffer.size()),
-                &bytes,
-                nullptr))
+        BOOL ok = DeviceIoControl(
+            device,
+            AGL_CONTROL_IOCTL,
+            buffer.data(),
+            len,
+            buffer.data(),
+            static_cast<DWORD>(buffer.size()),
+            &bytes,
+            nullptr);
+        if (!ok)
         {
             rejected++;
         }
     }
 
-    wprintf(L"fuzz_ioctl total=%u rejected=%u\n", count, rejected);
+    ULONG structured = 0;
+    for (ULONG op = 0; op < AGL_OP_MAX; op++)
+    {
+        for (ULONG variant = 0; variant < 8; variant++)
+        {
+            std::vector<uint8_t> in(256, 0);
+            std::vector<uint8_t> out(512, 0);
+            auto* header = reinterpret_cast<AGL_CONTROL_HEADER*>(in.data());
+            header->StructSize = sizeof(*header);
+            header->Version = AGL_PROTOCOL_VERSION;
+            header->OpCode = op;
+            header->InputLength = 0;
+
+            switch (variant)
+            {
+            case 0:
+                header->StructSize = sizeof(*header) - 1;
+                break;
+            case 1:
+                header->StructSize = sizeof(*header) + 1;
+                break;
+            case 2:
+                header->StructSize = 0xFFFFFFFF;
+                break;
+            case 3:
+                header->Version = 0;
+                break;
+            case 4:
+                header->Version = 0xFFFFFFFF;
+                break;
+            case 5:
+                header->OpCode = AGL_OP_MAX + 0x10;
+                break;
+            case 6:
+                header->InputLength = 0xFFFFFFFF;
+                break;
+            case 7:
+                header->InputLength = 0;
+                break;
+            }
+
+            BOOL ok = DeviceIoControl(
+                device,
+                AGL_CONTROL_IOCTL,
+                in.data(),
+                static_cast<DWORD>(in.size()),
+                out.data(),
+                static_cast<DWORD>(out.size()),
+                &bytes,
+                nullptr);
+            if (!ok)
+            {
+                rejected++;
+            }
+            structured++;
+        }
+    }
+
+    wprintf(L"fuzz_ioctl random=%u structured=%u rejected=%u\n",
+        count, structured, rejected);
+}
+
+static void RunFuzzPolicy(HANDLE device, ULONG count)
+{
+    ULONG rejected = 0;
+    ULONG returned = 0;
+
+    srand(GetTickCount());
+    for (ULONG i = 0; i < count; i++)
+    {
+        ULONG length = (rand() % 2048) + 1;
+        std::vector<uint8_t> policy(length);
+        for (ULONG j = 0; j < length; j++)
+        {
+            policy[j] = static_cast<uint8_t>(rand());
+        }
+
+        if (length >= sizeof(AGL_POLICY_HEADER))
+        {
+            auto* header = reinterpret_cast<AGL_POLICY_HEADER*>(policy.data());
+            header->StructSize = rand() % 256;
+            header->Version = rand() % 4;
+            header->Mode = rand() % 2;
+            header->RuleCount = rand() % 256;
+            header->PayloadLength = length - sizeof(*header);
+        }
+
+        if (!SendControl(
+                device,
+                AGL_OP_LOAD_POLICY,
+                policy.data(),
+                length,
+                nullptr,
+                0,
+                returned))
+        {
+            rejected++;
+        }
+    }
+
+    wprintf(L"fuzz_policy total=%u rejected=%u\n", count, rejected);
 }
 
 static void RunStreamStats(HANDLE device)
@@ -370,6 +473,10 @@ int wmain(int argc, wchar_t* argv[])
     else if (lstrcmpiW(argv[1], L"--fuzz-ioctl") == 0 && argc >= 3)
     {
         RunFuzzIoctl(device, static_cast<ULONG>(_wtoi(argv[2])));
+    }
+    else if (lstrcmpiW(argv[1], L"--fuzz-policy") == 0 && argc >= 3)
+    {
+        RunFuzzPolicy(device, static_cast<ULONG>(_wtoi(argv[2])));
     }
     else if (lstrcmpiW(argv[1], L"--stream-stats") == 0)
     {

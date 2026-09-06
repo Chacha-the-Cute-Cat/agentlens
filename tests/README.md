@@ -26,6 +26,12 @@ stress_reload.cmd
 stress_ioctl.cmd
 ```
 
+## Policy Fuzzing
+
+```cmd
+fuzz_policy.cmd
+```
+
 ## Driver Verifier
 
 ```cmd

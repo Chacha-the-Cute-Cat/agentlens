@@ -13,6 +13,20 @@
 static PDEVICE_OBJECT AglControlDevice = NULL;
 static UNICODE_STRING AglSymbolicLink = { 0 };
 
+typedef NTSTATUS (*AGL_CONTROL_HANDLER)(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information);
+
+typedef struct _AGL_CONTROL_OPERATION {
+    ULONG OpCode;
+    ULONG RequiredInput;
+    ULONG RequiredOutput;
+    AGL_CONTROL_HANDLER Handler;
+} AGL_CONTROL_OPERATION;
+
 static NTSTATUS AglHandleDeviceControl(
     PIRP Irp,
     PIO_STACK_LOCATION IrpSp,
@@ -112,6 +126,303 @@ NTSTATUS AglControlDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     return AglFinishIrp(Irp, status, info);
 }
 
+static NTSTATUS AglControlGetVersion(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_VERSION_INFO info;
+
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(Header);
+
+    if (OutputLength < sizeof(info))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    RtlZeroMemory(&info, sizeof(info));
+    info.ProtocolVersion = AGL_PROTOCOL_VERSION;
+    info.KernelMajor = 0;
+    info.KernelMinor = 1;
+    info.KernelBuild = 0;
+    RtlCopyMemory(SystemBuffer, &info, sizeof(info));
+    *Information = sizeof(info);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlSubscribe(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    UNREFERENCED_PARAMETER(SystemBuffer);
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Header);
+    UNREFERENCED_PARAMETER(Information);
+    AglEventRingSubscribe();
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlUnsubscribe(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    UNREFERENCED_PARAMETER(SystemBuffer);
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Header);
+    UNREFERENCED_PARAMETER(Information);
+    AglEventRingUnsubscribe();
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlReadEvents(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    ULONG bytes = 0;
+    ULONG offset = Header->StructSize;
+    NTSTATUS status;
+
+    UNREFERENCED_PARAMETER(InputLength);
+
+    if (OutputLength <= offset)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    status = AglEventRingRead(
+        (PUCHAR)SystemBuffer + offset,
+        OutputLength - offset,
+        &bytes);
+    if (status == STATUS_NO_MORE_ENTRIES)
+    {
+        return status;
+    }
+    *Information = offset + bytes;
+    return status;
+}
+
+static NTSTATUS AglControlGetStats(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_STATS stats;
+
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(Header);
+
+    if (OutputLength < sizeof(stats))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    AglEventRingGetStats(&stats, sizeof(stats));
+    RtlCopyMemory(SystemBuffer, &stats, sizeof(stats));
+    *Information = sizeof(stats);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlQueryProcess(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_PROCESS_QUERY* query = (AGL_PROCESS_QUERY*)((PUCHAR)SystemBuffer + Header->StructSize);
+    AGL_PROCESS_CTX* ctx;
+    ULONG fixedSize = sizeof(AGL_PROCESS_QUERY);
+    ULONG totalSize;
+
+    if (InputLength < Header->StructSize + fixedSize)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    ctx = AglContextAcquireProcessValidated(query->ProcessId);
+    if (!ctx)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    totalSize = fixedSize + ctx->ImagePath.Length + ctx->ImageName.Length;
+    if (OutputLength < Header->StructSize + totalSize)
+    {
+        AglContextReleaseProcess(ctx);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    query->CreateTime = ctx->CreateTime;
+    query->ParentProcessId = ctx->ParentProcessId;
+    query->SessionId = ctx->SessionId;
+    query->ImagePathLength = ctx->ImagePath.Length;
+    query->ImageNameLength = ctx->ImageName.Length;
+    query->ImagePathOffset = fixedSize;
+    query->ImageNameOffset = fixedSize + ctx->ImagePath.Length;
+    if (ctx->ImagePath.Length)
+    {
+        RtlCopyMemory(
+            (PUCHAR)query + query->ImagePathOffset,
+            ctx->ImagePath.Buffer,
+            ctx->ImagePath.Length);
+    }
+    if (ctx->ImageName.Length)
+    {
+        RtlCopyMemory(
+            (PUCHAR)query + query->ImageNameOffset,
+            ctx->ImageName.Buffer,
+            ctx->ImageName.Length);
+    }
+
+    AglContextReleaseProcess(ctx);
+    *Information = Header->StructSize + totalSize;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlLoadPolicy(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    ULONG policyLength;
+
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Information);
+
+    policyLength = InputLength > Header->StructSize
+        ? InputLength - Header->StructSize
+        : 0;
+    if (policyLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return AglPolicyLoad(
+        (PUCHAR)SystemBuffer + Header->StructSize,
+        policyLength);
+}
+
+static NTSTATUS AglControlClearPolicy(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    UNREFERENCED_PARAMETER(SystemBuffer);
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Header);
+    UNREFERENCED_PARAMETER(Information);
+    AglPolicyClear();
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlUpdateContext(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_CONTEXT_UPDATE* update = (AGL_CONTEXT_UPDATE*)((PUCHAR)SystemBuffer + Header->StructSize);
+    UNICODE_STRING cwd;
+
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Information);
+
+    if (InputLength < Header->StructSize + sizeof(AGL_CONTEXT_UPDATE) ||
+        update->CurrentDirectoryLength > AGL_MAX_PATH_CHARS * sizeof(WCHAR) ||
+        InputLength < Header->StructSize + sizeof(AGL_CONTEXT_UPDATE) + update->CurrentDirectoryLength)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    cwd.Buffer = update->Data;
+    cwd.Length = (USHORT)update->CurrentDirectoryLength;
+    cwd.MaximumLength = cwd.Length + sizeof(WCHAR);
+    AglContextUpdateProcess(update->ProcessId, update->EnvironmentHash, &cwd);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlGetStreamStats(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_STREAM_STATS stats;
+
+    UNREFERENCED_PARAMETER(InputLength);
+    UNREFERENCED_PARAMETER(Header);
+
+    if (OutputLength < sizeof(stats))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    AglNetworkGetStreamStats(&stats.Bytes, &stats.Packets);
+    RtlCopyMemory(SystemBuffer, &stats, sizeof(stats));
+    *Information = sizeof(stats);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS AglControlUpdateImageContext(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_IMAGE_UPDATE* update = (AGL_IMAGE_UPDATE*)((PUCHAR)SystemBuffer + Header->StructSize);
+
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Information);
+
+    if (InputLength < Header->StructSize + sizeof(AGL_IMAGE_UPDATE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    AglContextUpdateImage(
+        update->ProcessId,
+        update->ImageBase,
+        update->PathHash,
+        update->FileSha256,
+        update->SignerState);
+    return STATUS_SUCCESS;
+}
+
+static const AGL_CONTROL_OPERATION AglControlOperations[] = {
+    { AGL_OP_GET_VERSION, 0, sizeof(AGL_VERSION_INFO), AglControlGetVersion },
+    { AGL_OP_SUBSCRIBE_EVENTS, 0, 0, AglControlSubscribe },
+    { AGL_OP_UNSUBSCRIBE_EVENTS, 0, 0, AglControlUnsubscribe },
+    { AGL_OP_READ_EVENTS, 0, 0, AglControlReadEvents },
+    { AGL_OP_GET_STATS, 0, sizeof(AGL_STATS), AglControlGetStats },
+    { AGL_OP_QUERY_PROCESS, sizeof(AGL_PROCESS_QUERY), sizeof(AGL_PROCESS_QUERY), AglControlQueryProcess },
+    { AGL_OP_LOAD_POLICY, 0, 0, AglControlLoadPolicy },
+    { AGL_OP_CLEAR_POLICY, 0, 0, AglControlClearPolicy },
+    { AGL_OP_UPDATE_CONTEXT, sizeof(AGL_CONTEXT_UPDATE), 0, AglControlUpdateContext },
+    { AGL_OP_GET_STREAM_STATS, 0, sizeof(AGL_STREAM_STATS), AglControlGetStreamStats },
+    { AGL_OP_UPDATE_IMAGE_CONTEXT, sizeof(AGL_IMAGE_UPDATE), 0, AglControlUpdateImageContext },
+};
+
 static NTSTATUS AglHandleDeviceControl(
     PIRP Irp,
     PIO_STACK_LOCATION IrpSp,
@@ -121,7 +432,7 @@ static NTSTATUS AglHandleDeviceControl(
     ULONG inputLength = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
     ULONG outputLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
     AGL_CONTROL_HEADER* header;
-    NTSTATUS status;
+    const AGL_CONTROL_OPERATION* operation = NULL;
 
     if (Irp->RequestorMode != UserMode)
     {
@@ -150,182 +461,30 @@ static NTSTATUS AglHandleDeviceControl(
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    switch (header->OpCode)
+    for (ULONG i = 0; i < ARRAYSIZE(AglControlOperations); i++)
     {
-    case AGL_OP_GET_VERSION:
-    {
-        AGL_VERSION_INFO info;
-        RtlZeroMemory(&info, sizeof(info));
-        info.ProtocolVersion = AGL_PROTOCOL_VERSION;
-        info.KernelMajor = 0;
-        info.KernelMinor = 1;
-        info.KernelBuild = 0;
-        if (outputLength < sizeof(info))
+        if (AglControlOperations[i].OpCode == header->OpCode)
         {
-            return STATUS_BUFFER_TOO_SMALL;
+            operation = &AglControlOperations[i];
+            break;
         }
-        RtlCopyMemory(systemBuffer, &info, sizeof(info));
-        *Information = sizeof(info);
-        return STATUS_SUCCESS;
     }
 
-    case AGL_OP_SUBSCRIBE_EVENTS:
-        AglEventRingSubscribe();
-        return STATUS_SUCCESS;
-
-    case AGL_OP_UNSUBSCRIBE_EVENTS:
-        AglEventRingUnsubscribe();
-        return STATUS_SUCCESS;
-
-    case AGL_OP_READ_EVENTS:
+    if (!operation)
     {
-        ULONG bytes = 0;
-        ULONG offset = header->StructSize;
-        if (outputLength <= offset)
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        status = AglEventRingRead(
-            (PUCHAR)systemBuffer + offset,
-            outputLength - offset,
-            &bytes);
-        if (status == STATUS_NO_MORE_ENTRIES)
-        {
-            return status;
-        }
-        *Information = offset + bytes;
-        return status;
+        return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    case AGL_OP_GET_STATS:
+    if (inputLength < header->StructSize + operation->RequiredInput ||
+        outputLength < operation->RequiredOutput)
     {
-        AGL_STATS stats;
-        if (outputLength < sizeof(stats))
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        AglEventRingGetStats(&stats, sizeof(stats));
-        RtlCopyMemory(systemBuffer, &stats, sizeof(stats));
-        *Information = sizeof(stats);
-        return STATUS_SUCCESS;
+        return STATUS_BUFFER_TOO_SMALL;
     }
 
-    case AGL_OP_QUERY_PROCESS:
-    {
-        AGL_PROCESS_QUERY* query = (AGL_PROCESS_QUERY*)((PUCHAR)systemBuffer + header->StructSize);
-        AGL_PROCESS_CTX* ctx;
-        ULONG fixedSize = sizeof(AGL_PROCESS_QUERY);
-        ULONG totalSize;
-
-        if (inputLength < header->StructSize + fixedSize)
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        ctx = AglContextAcquireProcessValidated(query->ProcessId);
-        if (!ctx)
-        {
-            return STATUS_NOT_FOUND;
-        }
-
-        totalSize = fixedSize + ctx->ImagePath.Length + ctx->ImageName.Length;
-        if (outputLength < header->StructSize + totalSize)
-        {
-            AglContextReleaseProcess(ctx);
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-
-        query->CreateTime = ctx->CreateTime;
-        query->ParentProcessId = ctx->ParentProcessId;
-        query->SessionId = ctx->SessionId;
-        query->ImagePathLength = ctx->ImagePath.Length;
-        query->ImageNameLength = ctx->ImageName.Length;
-        query->ImagePathOffset = fixedSize;
-        query->ImageNameOffset = fixedSize + ctx->ImagePath.Length;
-        if (ctx->ImagePath.Length)
-        {
-            RtlCopyMemory(
-                (PUCHAR)query + query->ImagePathOffset,
-                ctx->ImagePath.Buffer,
-                ctx->ImagePath.Length);
-        }
-        if (ctx->ImageName.Length)
-        {
-            RtlCopyMemory(
-                (PUCHAR)query + query->ImageNameOffset,
-                ctx->ImageName.Buffer,
-                ctx->ImageName.Length);
-        }
-        AglContextReleaseProcess(ctx);
-        *Information = header->StructSize + totalSize;
-        return STATUS_SUCCESS;
-    }
-
-    case AGL_OP_LOAD_POLICY:
-    {
-        ULONG policyLength = inputLength > header->StructSize
-            ? inputLength - header->StructSize
-            : 0;
-        if (policyLength == 0)
-        {
-            return STATUS_INVALID_PARAMETER;
-        }
-        return AglPolicyLoad(
-            (PUCHAR)systemBuffer + header->StructSize,
-            policyLength);
-    }
-
-    case AGL_OP_CLEAR_POLICY:
-        AglPolicyClear();
-        return STATUS_SUCCESS;
-
-    case AGL_OP_UPDATE_CONTEXT:
-    {
-        AGL_CONTEXT_UPDATE* update = (AGL_CONTEXT_UPDATE*)((PUCHAR)systemBuffer + header->StructSize);
-        UNICODE_STRING cwd;
-
-        if (inputLength < header->StructSize + sizeof(AGL_CONTEXT_UPDATE) ||
-            update->CurrentDirectoryLength > AGL_MAX_PATH_CHARS * sizeof(WCHAR) ||
-            inputLength < header->StructSize + sizeof(AGL_CONTEXT_UPDATE) + update->CurrentDirectoryLength)
-        {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        cwd.Buffer = update->Data;
-        cwd.Length = (USHORT)update->CurrentDirectoryLength;
-        cwd.MaximumLength = cwd.Length + sizeof(WCHAR);
-        AglContextUpdateProcess(update->ProcessId, update->EnvironmentHash, &cwd);
-        return STATUS_SUCCESS;
-    }
-
-    case AGL_OP_GET_STREAM_STATS:
-    {
-        AGL_STREAM_STATS stats;
-        if (outputLength < sizeof(stats))
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        AglNetworkGetStreamStats(&stats.Bytes, &stats.Packets);
-        RtlCopyMemory(systemBuffer, &stats, sizeof(stats));
-        *Information = sizeof(stats);
-        return STATUS_SUCCESS;
-    }
-
-    case AGL_OP_UPDATE_IMAGE_CONTEXT:
-    {
-        AGL_IMAGE_UPDATE* update = (AGL_IMAGE_UPDATE*)((PUCHAR)systemBuffer + header->StructSize);
-        if (inputLength < header->StructSize + sizeof(AGL_IMAGE_UPDATE))
-        {
-            return STATUS_INVALID_PARAMETER;
-        }
-        AglContextUpdateImage(
-            update->ProcessId,
-            update->ImageBase,
-            update->PathHash,
-            update->FileSha256,
-            update->SignerState);
-        return STATUS_SUCCESS;
-    }
-    }
-
-    return STATUS_NOT_SUPPORTED;
+    return operation->Handler(
+        systemBuffer,
+        inputLength,
+        outputLength,
+        header,
+        Information);
 }
