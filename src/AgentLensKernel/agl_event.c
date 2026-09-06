@@ -22,7 +22,9 @@ static ULONG AglEventFlags(ULONG EventType)
         EventType == AGL_EVENT_REGISTRY_SET_VALUE ||
         EventType == AGL_EVENT_REGISTRY_DELETE_KEY ||
         EventType == AGL_EVENT_REGISTRY_DELETE_VALUE ||
-        EventType == AGL_EVENT_NETWORK_CONNECT)
+        EventType == AGL_EVENT_TOKEN_ANOMALY ||
+        EventType == AGL_EVENT_NETWORK_CONNECT ||
+        EventType == AGL_EVENT_NETWORK_DOMAIN)
     {
         return AGL_EVENT_FLAG_CRITICAL;
     }
@@ -245,6 +247,92 @@ NTSTATUS AglEventEmitThread(
         0,
         &event.ThreadCreateTime,
         sizeof(event.ThreadCreateTime));
+}
+
+NTSTATUS AglEventEmitTokenAnomaly(
+    ULONG64 ProcessId,
+    ULONG64 ParentProcessId,
+    ULONG ParentSidHash,
+    ULONG ParentIntegrityLevel,
+    ULONG ParentPrivilegeHash,
+    ULONG CurrentSidHash,
+    ULONG CurrentIntegrityLevel,
+    ULONG CurrentPrivilegeHash)
+{
+    AGL_TOKEN_EVENT event;
+    RtlZeroMemory(&event, sizeof(event));
+    event.ParentSidHash = ParentSidHash;
+    event.ParentIntegrityLevel = ParentIntegrityLevel;
+    event.ParentPrivilegeHash = ParentPrivilegeHash;
+    event.CurrentSidHash = CurrentSidHash;
+    event.CurrentIntegrityLevel = CurrentIntegrityLevel;
+    event.CurrentPrivilegeHash = CurrentPrivilegeHash;
+    return AglEventEmit(
+        AGL_EVENT_TOKEN_ANOMALY,
+        STATUS_SUCCESS,
+        ProcessId,
+        (ULONG64)(ULONG_PTR)PsGetCurrentThreadId(),
+        ParentProcessId,
+        0,
+        0,
+        (PUCHAR)&event + sizeof(AGL_EVENT_HEADER),
+        sizeof(event) - sizeof(AGL_EVENT_HEADER));
+}
+
+NTSTATUS AglEventEmitNetworkDomain(
+    ULONG64 ProcessId,
+    ULONG64 FlowId,
+    ULONG Protocol,
+    USHORT RemotePort,
+    USHORT LocalPort,
+    const UCHAR* RemoteAddress,
+    PCUNICODE_STRING Sni)
+{
+    ULONG sniLength = Sni ? Sni->Length : 0;
+    ULONG payloadLength = sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER) + sniLength;
+    PUCHAR buffer;
+    AGL_DOMAIN_EVENT* event;
+    NTSTATUS status;
+
+    if (sniLength > AGL_MAX_EVENT_PAYLOAD)
+    {
+        sniLength = AGL_MAX_EVENT_PAYLOAD;
+    }
+
+    buffer = AglAllocNonPaged(sizeof(AGL_EVENT_HEADER) + payloadLength);
+    if (!buffer)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    event = (AGL_DOMAIN_EVENT*)buffer;
+    RtlZeroMemory(event, sizeof(AGL_EVENT_HEADER) + payloadLength);
+    event->FlowId = FlowId;
+    event->Protocol = Protocol;
+    event->RemotePort = RemotePort;
+    event->LocalPort = LocalPort;
+    if (RemoteAddress)
+    {
+        RtlCopyMemory(event->RemoteAddress, RemoteAddress, 16);
+    }
+    event->SniLength = sniLength;
+    if (Sni && Sni->Buffer && sniLength)
+    {
+        RtlCopyMemory(event->Data, Sni->Buffer, sniLength);
+    }
+
+    status = AglEventEmit(
+        AGL_EVENT_NETWORK_DOMAIN,
+        STATUS_SUCCESS,
+        ProcessId,
+        (ULONG64)(ULONG_PTR)PsGetCurrentThreadId(),
+        0,
+        0,
+        0,
+        buffer + sizeof(AGL_EVENT_HEADER),
+        payloadLength);
+    AglFree(buffer);
+    return status;
 }
 
 NTSTATUS AglEventEmitImage(

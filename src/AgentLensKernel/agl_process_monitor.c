@@ -163,6 +163,32 @@ static void AglProcessNotify(
                 ctx->TokenSidHash != 0 ||
                 ctx->TokenIntegrityLevel != 0 ||
                 ctx->TokenPrivilegeHash != 0;
+
+            {
+                AGL_PROCESS_CTX* parentCtx = AglContextAcquireProcess(
+                    (ULONG64)(ULONG_PTR)CreateInfo->ParentProcessId);
+                if (parentCtx)
+                {
+                    if (parentCtx->TokenSnapshotValid && ctx->TokenSnapshotValid)
+                    {
+                        if (ctx->TokenIntegrityLevel > parentCtx->TokenIntegrityLevel ||
+                            ctx->TokenSidHash != parentCtx->TokenSidHash ||
+                            ctx->TokenPrivilegeHash != parentCtx->TokenPrivilegeHash)
+                        {
+                            AglEventEmitTokenAnomaly(
+                                (ULONG64)(ULONG_PTR)ProcessId,
+                                (ULONG64)(ULONG_PTR)CreateInfo->ParentProcessId,
+                                parentCtx->TokenSidHash,
+                                parentCtx->TokenIntegrityLevel,
+                                parentCtx->TokenPrivilegeHash,
+                                ctx->TokenSidHash,
+                                ctx->TokenIntegrityLevel,
+                                ctx->TokenPrivilegeHash);
+                        }
+                    }
+                    AglContextReleaseProcess(parentCtx);
+                }
+            }
             AglContextReleaseProcess(ctx);
         }
     }

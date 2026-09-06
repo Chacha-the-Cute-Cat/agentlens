@@ -126,6 +126,141 @@ static void AglFormatIPv4(UINT32 address, PWCHAR Buffer, USHORT BufferChars)
     Buffer[pos] = L'\0';
 }
 
+static ULONG AglReadU16(const UCHAR* Ptr)
+{
+    return ((ULONG)Ptr[0] << 8) | Ptr[1];
+}
+
+static ULONG AglReadU24(const UCHAR* Ptr)
+{
+    return ((ULONG)Ptr[0] << 16) | ((ULONG)Ptr[1] << 8) | Ptr[2];
+}
+
+static BOOLEAN AglParseTlsSni(
+    const UCHAR* Data,
+    ULONG Length,
+    PWCHAR Buffer,
+    USHORT BufferChars)
+{
+    ULONG cursor;
+    ULONG recordLength;
+    ULONG handshakeLength;
+    ULONG extensionsLength;
+    ULONG extensionsEnd;
+
+    if (!Data || !Buffer || BufferChars < 2 || Length < 5)
+    {
+        return FALSE;
+    }
+
+    if (Data[0] != 0x16)
+    {
+        return FALSE;
+    }
+
+    recordLength = AglReadU16(Data + 3);
+    if (recordLength + 5 > Length)
+    {
+        return FALSE;
+    }
+
+    cursor = 5;
+    if (Data[cursor] != 0x01)
+    {
+        return FALSE;
+    }
+
+    handshakeLength = AglReadU24(Data + cursor + 1);
+    cursor += 4;
+    if (cursor + handshakeLength > Length)
+    {
+        return FALSE;
+    }
+
+    cursor += 2 + 32;
+    if (cursor >= Length)
+    {
+        return FALSE;
+    }
+    cursor += 1 + Data[cursor];
+
+    if (cursor + 2 > Length)
+    {
+        return FALSE;
+    }
+    cursor += 2 + AglReadU16(Data + cursor);
+
+    if (cursor >= Length)
+    {
+        return FALSE;
+    }
+    cursor += 1 + Data[cursor];
+
+    if (cursor + 2 > Length)
+    {
+        return FALSE;
+    }
+    extensionsLength = AglReadU16(Data + cursor);
+    cursor += 2;
+    extensionsEnd = cursor + extensionsLength;
+    if (extensionsEnd > Length)
+    {
+        return FALSE;
+    }
+
+    while (cursor + 4 <= extensionsEnd)
+    {
+        ULONG extensionType = AglReadU16(Data + cursor);
+        ULONG extensionLength = AglReadU16(Data + cursor + 2);
+        ULONG extensionData = cursor + 4;
+        ULONG extensionEnd = extensionData + extensionLength;
+
+        if (extensionEnd > extensionsEnd)
+        {
+            return FALSE;
+        }
+
+        if (extensionType == 0)
+        {
+            ULONG q = extensionData;
+            ULONG nameLength;
+            ULONG nameChars;
+            ULONG i;
+
+            if (q + 2 > extensionEnd)
+            {
+                return FALSE;
+            }
+            q += 2;
+            if (q + 3 > extensionEnd || Data[q] != 0)
+            {
+                return FALSE;
+            }
+            nameLength = AglReadU16(Data + q + 1);
+            q += 3;
+            if (q + nameLength > extensionEnd)
+            {
+                return FALSE;
+            }
+            nameChars = nameLength;
+            if (nameChars > (ULONG)(BufferChars - 1))
+            {
+                nameChars = (ULONG)(BufferChars - 1);
+            }
+            for (i = 0; i < nameChars; i++)
+            {
+                Buffer[i] = (WCHAR)Data[q + i];
+            }
+            Buffer[i] = L'\0';
+            return TRUE;
+        }
+
+        cursor = extensionEnd;
+    }
+
+    return FALSE;
+}
+
 static void AglNetworkClassify(
     const FWPS_INCOMING_VALUES* inFixedValues,
     const FWPS_INCOMING_METADATA_VALUES* inMetaValues,
@@ -150,6 +285,36 @@ static void AglNetworkClassify(
         FWPS_STREAM_CALLOUT_IO_PACKET0* packet = (FWPS_STREAM_CALLOUT_IO_PACKET0*)layerData;
         if (packet && packet->streamData)
         {
+            if ((packet->streamData->flags & FWPS_STREAM_FLAG_SEND) != 0)
+            {
+                UCHAR tlsBuffer[2048];
+                SIZE_T copied = 0;
+                WCHAR sni[128] = { 0 };
+                FwpsCopyStreamDataToBuffer0(
+                    packet->streamData,
+                    tlsBuffer,
+                    sizeof(tlsBuffer),
+                    &copied);
+                if (AglParseTlsSni(tlsBuffer, (ULONG)copied, sni, ARRAYSIZE(sni)))
+                {
+                    UNICODE_STRING sniName;
+                    AGL_NET_FLOW_CTX flowSnapshot = { 0 };
+                    RtlInitUnicodeString(&sniName, sni);
+                    if (flowContext &&
+                        AglContextGetFlowSnapshot(flowContext, &flowSnapshot))
+                    {
+                        AglEventEmitNetworkDomain(
+                            flowSnapshot.ProcessId,
+                            flowContext,
+                            flowSnapshot.Protocol,
+                            flowSnapshot.RemotePort,
+                            flowSnapshot.LocalPort,
+                            flowSnapshot.RemoteAddress,
+                            &sniName);
+                    }
+                }
+            }
+
             InterlockedAdd64((LONG64*)&AglStreamBytes, (LONG64)packet->streamData->dataLength);
             InterlockedIncrement64((LONG64*)&AglStreamPackets);
             if (flowContext)

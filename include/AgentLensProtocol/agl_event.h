@@ -31,14 +31,16 @@ typedef enum _AGL_EVENT_TYPE {
     AGL_EVENT_REGISTRY_DELETE_VALUE,
     AGL_EVENT_OBJECT_HANDLE,
     AGL_EVENT_NETWORK_CONNECT,
+    AGL_EVENT_NETWORK_DOMAIN,
     AGL_EVENT_NETWORK_FLOW_ESTABLISHED,
     AGL_EVENT_NETWORK_FLOW_CLOSED,
+    AGL_EVENT_TOKEN_ANOMALY,
     AGL_EVENT_POLICY_DENY,
     AGL_EVENT_MAX
 } AGL_EVENT_TYPE;
 
 #define AGL_EVENT_RING_MAGIC 0x676C4145 // 'EAgL' little-endian
-#define AGL_EVENT_SCHEMA_VERSION 4
+#define AGL_EVENT_SCHEMA_VERSION 5
 
 typedef struct _AGL_RING_RECORD_HEADER {
     unsigned long RecordLength; // total bytes, including this header
@@ -148,6 +150,27 @@ typedef struct _AGL_NETWORK_EVENT {
     unsigned char  RemoteAddress[16];
     unsigned char  LocalAddress[16];
 } AGL_NETWORK_EVENT;
+
+typedef struct _AGL_DOMAIN_EVENT {
+    AGL_EVENT_HEADER Header;
+    unsigned long long FlowId;
+    unsigned long Protocol;
+    unsigned long RemotePort;
+    unsigned long LocalPort;
+    unsigned char RemoteAddress[16];
+    unsigned long SniLength;
+    wchar_t Data[1];
+} AGL_DOMAIN_EVENT;
+
+typedef struct _AGL_TOKEN_EVENT {
+    AGL_EVENT_HEADER Header;
+    unsigned long ParentSidHash;
+    unsigned long ParentIntegrityLevel;
+    unsigned long ParentPrivilegeHash;
+    unsigned long CurrentSidHash;
+    unsigned long CurrentIntegrityLevel;
+    unsigned long CurrentPrivilegeHash;
+} AGL_TOKEN_EVENT;
 
 #ifdef __cplusplus
 }

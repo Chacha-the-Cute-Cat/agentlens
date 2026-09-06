@@ -36,8 +36,10 @@ namespace
         case AGL_EVENT_REGISTRY_DELETE_VALUE: return L"registry.delete_value";
         case AGL_EVENT_OBJECT_HANDLE: return L"object.handle";
         case AGL_EVENT_NETWORK_CONNECT: return L"network.connect";
+        case AGL_EVENT_NETWORK_DOMAIN: return L"network.domain";
         case AGL_EVENT_NETWORK_FLOW_ESTABLISHED: return L"network.flow_established";
         case AGL_EVENT_NETWORK_FLOW_CLOSED: return L"network.flow_closed";
+        case AGL_EVENT_TOKEN_ANOMALY: return L"token.anomaly";
         default: return L"unknown";
         }
     }
@@ -357,6 +359,33 @@ void EventReader::PrintJsonEvents(
                         }
                     }
                 }
+            }
+            break;
+
+        case AGL_EVENT_NETWORK_DOMAIN:
+            if (payloadLength >= sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* domain = reinterpret_cast<const AGL_DOMAIN_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"flow_id\":" + std::to_wstring(domain->FlowId);
+                json += L",\"protocol\":" + std::to_wstring(domain->Protocol);
+                json += L",\"remote_port\":" + std::to_wstring(domain->RemotePort);
+                json += L",\"local_port\":" + std::to_wstring(domain->LocalPort);
+                json += L",\"sni\":\"" + JsonEscape(domain->Data, domain->SniLength / sizeof(wchar_t)) + L"\"";
+            }
+            break;
+
+        case AGL_EVENT_TOKEN_ANOMALY:
+            if (payloadLength >= sizeof(AGL_TOKEN_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* token = reinterpret_cast<const AGL_TOKEN_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"parent_sid_hash\":" + std::to_wstring(token->ParentSidHash);
+                json += L",\"parent_integrity\":" + std::to_wstring(token->ParentIntegrityLevel);
+                json += L",\"parent_privilege_hash\":" + std::to_wstring(token->ParentPrivilegeHash);
+                json += L",\"current_sid_hash\":" + std::to_wstring(token->CurrentSidHash);
+                json += L",\"current_integrity\":" + std::to_wstring(token->CurrentIntegrityLevel);
+                json += L",\"current_privilege_hash\":" + std::to_wstring(token->CurrentPrivilegeHash);
             }
             break;
         }

@@ -30,6 +30,25 @@ NTSTATUS AglEventEmitThread(
     ULONG64 ThreadId,
     ULONG64 ParentProcessId);
 
+NTSTATUS AglEventEmitTokenAnomaly(
+    ULONG64 ProcessId,
+    ULONG64 ParentProcessId,
+    ULONG ParentSidHash,
+    ULONG ParentIntegrityLevel,
+    ULONG ParentPrivilegeHash,
+    ULONG CurrentSidHash,
+    ULONG CurrentIntegrityLevel,
+    ULONG CurrentPrivilegeHash);
+
+NTSTATUS AglEventEmitNetworkDomain(
+    ULONG64 ProcessId,
+    ULONG64 FlowId,
+    ULONG Protocol,
+    USHORT RemotePort,
+    USHORT LocalPort,
+    const UCHAR* RemoteAddress,
+    PCUNICODE_STRING Sni);
+
 NTSTATUS AglEventEmitImage(
     ULONG EventType,
     ULONG64 ProcessId,
