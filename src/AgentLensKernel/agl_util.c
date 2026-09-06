@@ -32,8 +32,9 @@ NTSTATUS AglCopyUnicodeString(
     }
 
     bytes = Source->Length;
-    UNREFERENCED_PARAMETER(PoolType);
-    Dest->Buffer = AglAllocNonPaged(bytes + sizeof(WCHAR));
+    Dest->Buffer = (PoolType == PagedPool)
+        ? AglAllocPaged(bytes + sizeof(WCHAR))
+        : AglAllocNonPaged(bytes + sizeof(WCHAR));
     if (!Dest->Buffer)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -72,8 +73,9 @@ NTSTATUS AglCaptureString(
     }
 
     bytes = (len + 1) * sizeof(WCHAR);
-    UNREFERENCED_PARAMETER(PoolType);
-    Dest->Buffer = AglAllocNonPaged(bytes);
+    Dest->Buffer = (PoolType == PagedPool)
+        ? AglAllocPaged(bytes)
+        : AglAllocNonPaged(bytes);
     if (!Dest->Buffer)
     {
         return STATUS_INSUFFICIENT_RESOURCES;

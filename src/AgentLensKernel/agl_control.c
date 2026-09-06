@@ -214,8 +214,10 @@ static NTSTATUS AglHandleDeviceControl(
     {
         AGL_PROCESS_QUERY* query = (AGL_PROCESS_QUERY*)((PUCHAR)systemBuffer + header->StructSize);
         AGL_PROCESS_CTX* ctx;
-        if (inputLength < header->StructSize + sizeof(*query) ||
-            outputLength < sizeof(*query))
+        ULONG fixedSize = sizeof(AGL_PROCESS_QUERY);
+        ULONG totalSize;
+
+        if (inputLength < header->StructSize + fixedSize)
         {
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -224,15 +226,37 @@ static NTSTATUS AglHandleDeviceControl(
         {
             return STATUS_NOT_FOUND;
         }
+
+        totalSize = fixedSize + ctx->ImagePath.Length + ctx->ImageName.Length;
+        if (outputLength < header->StructSize + totalSize)
+        {
+            AglContextReleaseProcess(ctx);
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
         query->CreateTime = ctx->CreateTime;
         query->ParentProcessId = ctx->ParentProcessId;
         query->SessionId = ctx->SessionId;
         query->ImagePathLength = ctx->ImagePath.Length;
         query->ImageNameLength = ctx->ImageName.Length;
-        query->ImagePathOffset = sizeof(AGL_PROCESS_QUERY);
-        query->ImageNameOffset = query->ImagePathOffset + ctx->ImagePath.Length;
+        query->ImagePathOffset = fixedSize;
+        query->ImageNameOffset = fixedSize + ctx->ImagePath.Length;
+        if (ctx->ImagePath.Length)
+        {
+            RtlCopyMemory(
+                (PUCHAR)query + query->ImagePathOffset,
+                ctx->ImagePath.Buffer,
+                ctx->ImagePath.Length);
+        }
+        if (ctx->ImageName.Length)
+        {
+            RtlCopyMemory(
+                (PUCHAR)query + query->ImageNameOffset,
+                ctx->ImageName.Buffer,
+                ctx->ImageName.Length);
+        }
         AglContextReleaseProcess(ctx);
-        *Information = sizeof(*query);
+        *Information = header->StructSize + totalSize;
         return STATUS_SUCCESS;
     }
 
@@ -260,7 +284,8 @@ static NTSTATUS AglHandleDeviceControl(
         UNICODE_STRING cwd;
 
         if (inputLength < header->StructSize + sizeof(AGL_CONTEXT_UPDATE) ||
-            update->CurrentDirectoryLength > AGL_MAX_PATH_CHARS * sizeof(WCHAR))
+            update->CurrentDirectoryLength > AGL_MAX_PATH_CHARS * sizeof(WCHAR) ||
+            inputLength < header->StructSize + sizeof(AGL_CONTEXT_UPDATE) + update->CurrentDirectoryLength)
         {
             return STATUS_INVALID_PARAMETER;
         }

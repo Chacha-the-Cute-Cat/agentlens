@@ -6,6 +6,8 @@
 
 AGL_CONTEXT_MANAGER AglContext = { 0 };
 
+static void AglFreeProcessCtx(AGL_PROCESS_CTX* Ctx);
+
 void AglContextInitialize(void)
 {
     KeInitializeSpinLock(&AglContext.Lock);
@@ -28,6 +30,7 @@ void AglContextDestroy(void)
     {
         next = entry->Flink;
         RemoveEntryList(entry);
+        AglFreeProcessCtx(CONTAINING_RECORD(entry, AGL_PROCESS_CTX, ListEntry));
         entry = next;
     }
     AglContext.ProcessCount = 0;

@@ -127,16 +127,38 @@ NTSTATUS AglEventEmitProcess(
     ULONG pathLen = ImagePath ? ImagePath->Length : 0;
     ULONG cmdLen = CommandLine ? CommandLine->Length : 0;
     ULONG nameLen = ImageName ? ImageName->Length : 0;
-    ULONG total = pathLen + cmdLen + nameLen + sizeof(WCHAR) * 3;
+    ULONG fixedPayload = sizeof(AGL_PROCESS_EVENT) - sizeof(AGL_EVENT_HEADER);
+    ULONG budget = 0;
+    ULONG total;
     PUCHAR buffer;
     AGL_PROCESS_EVENT* event;
     PWCHAR data;
     NTSTATUS status;
 
-    if (total > AGL_MAX_EVENT_PAYLOAD)
+    if (AGL_MAX_EVENT_PAYLOAD >= fixedPayload + sizeof(WCHAR) * 3)
     {
-        total = AGL_MAX_EVENT_PAYLOAD;
+        budget = AGL_MAX_EVENT_PAYLOAD - fixedPayload - sizeof(WCHAR) * 3;
     }
+    budget &= ~((ULONG)sizeof(WCHAR) - 1);
+
+    if (pathLen > budget)
+    {
+        pathLen = budget;
+    }
+    budget -= pathLen;
+
+    if (nameLen > budget)
+    {
+        nameLen = budget;
+    }
+    budget -= nameLen;
+
+    if (cmdLen > budget)
+    {
+        cmdLen = budget;
+    }
+
+    total = pathLen + nameLen + cmdLen + sizeof(WCHAR) * 3;
 
     buffer = AglAllocNonPaged(sizeof(AGL_PROCESS_EVENT) + total);
     if (!buffer)

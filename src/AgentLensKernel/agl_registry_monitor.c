@@ -156,6 +156,45 @@ static ULONG AglHashBuffer(PVOID Data, ULONG Length)
     return hash;
 }
 
+static ULONG AglHashBufferSafe(PVOID Data, ULONG Length)
+{
+    UCHAR stackBuffer[256];
+    ULONG hash = 5381;
+    ULONG offset = 0;
+
+    if (!Data || Length == 0)
+    {
+        return 0;
+    }
+
+    if ((ULONG_PTR)Data >= (ULONG_PTR)MmUserProbeAddress)
+    {
+        return AglHashBuffer(Data, Length);
+    }
+
+    while (offset < Length)
+    {
+        ULONG chunk = min((ULONG)sizeof(stackBuffer), Length - offset);
+        __try
+        {
+            ProbeForRead((PUCHAR)Data + offset, chunk, sizeof(UCHAR));
+            RtlCopyMemory(stackBuffer, (PUCHAR)Data + offset, chunk);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            break;
+        }
+
+        for (ULONG i = 0; i < chunk; i++)
+        {
+            hash = hash * 33 + stackBuffer[i];
+        }
+        offset += chunk;
+    }
+
+    return hash;
+}
+
 static BOOLEAN AglSafeReadUlong32(PVOID Address, PULONG Value)
 {
     if (!Address || !Value)
@@ -438,7 +477,7 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
         desiredAccess = KEY_SET_VALUE;
         valueType = info->Type;
         valueLength = info->DataSize;
-        valueHash = AglHashBuffer(info->Data, info->DataSize);
+        valueHash = AglHashBufferSafe(info->Data, info->DataSize);
         if (NT_SUCCESS(AglRegistryGetObjectPath(
                 info->Object,
                 objPathBuffer,
@@ -564,7 +603,12 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
 
 NTSTATUS AglRegistryMonitorInitialize(PDRIVER_OBJECT DriverObject)
 {
-    NTSTATUS status = CmRegisterCallbackEx(
+    NTSTATUS status;
+
+    KeInitializeSpinLock(&AglRegistryCtxLock);
+    InitializeListHead(&AglRegistryCtxList);
+
+    status = CmRegisterCallbackEx(
         AglRegistryCallback,
         &AglRegistryAltitude,
         DriverObject,
@@ -577,9 +621,6 @@ NTSTATUS AglRegistryMonitorInitialize(PDRIVER_OBJECT DriverObject)
         AglTraceError("CmRegisterCallbackEx failed: 0x%08X\n", status);
         return status;
     }
-
-    KeInitializeSpinLock(&AglRegistryCtxLock);
-    InitializeListHead(&AglRegistryCtxList);
 
     AglRegistryInstalled = TRUE;
     return STATUS_SUCCESS;

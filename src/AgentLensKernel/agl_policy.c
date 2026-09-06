@@ -614,6 +614,11 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (header->StructSize > PolicyLength)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (header->RuleCount > AGL_MAX_POLICY_RULES)
     {
         return STATUS_BUFFER_OVERFLOW;
