@@ -1,0 +1,14 @@
+# AgentLens sample policy
+
+mode = control
+
+deny file.write
+    process = agent.exe
+    path = C:\Users\*\Desktop\*
+
+deny registry.set
+    process = agent.exe
+    path = \REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+
+deny network.connect
+    process = agent.exe

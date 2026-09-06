@@ -1,0 +1,16 @@
+build/
+src/*/build/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.sys
+*.exe
+*.dll
+*.log
+
+.vs/
+*.vsidx
+*.suo
+*.user

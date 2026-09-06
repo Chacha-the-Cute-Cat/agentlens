@@ -1,0 +1,30 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 07/01/2026,0.1.0.0
+CatalogFile = AgentLensKernel.cat
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[DefaultInstall.NTamd64]
+CopyFiles = DriverCopyFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService = AgentLensKernel,0x00000002,AgentLensKernelService
+
+[DriverCopyFiles]
+AgentLensKernel.sys
+
+[AgentLensKernelService]
+DisplayName    = %ServiceDisplayName%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\AgentLensKernel.sys
+
+[Strings]
+ProviderName      = "AgentLens"
+ServiceDisplayName = "AgentLens Kernel"

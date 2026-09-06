@@ -1,0 +1,3 @@
+# AgentLens policy placeholder.
+# The current scaffold expects a binary AGL_POLICY_HEADER payload.
+# Text policy import will be added after the control client stabilizes.
