@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentLens 工程实现总结</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #172033;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --good: #4ade80;
+    --warn: #facc15;
+    --bad: #f87171;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1, h2, h3 { color: #f8fafc; }
+  h1 { margin-top: 0; }
+  .subtitle { color: var(--muted); margin-top: -8px; }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin: 24px 0;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  .card .v { font-size: 20px; font-weight: 700; margin-top: 6px; }
+  .ok { color: var(--good); }
+  .warn { color: var(--warn); }
+  .bad { color: var(--bad); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    margin: 18px 0;
+  }
+  pre {
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    overflow-x: auto;
+    color: #cbd5e1;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { border: 1px solid var(--border); padding: 9px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); color: #f8fafc; }
+  td code, li code { color: #7dd3fc; }
+  .tag {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid;
+  }
+  .tag.full { color: var(--good); border-color: rgba(74,222,128,.35); background: rgba(74,222,128,.08); }
+  .tag.part { color: var(--warn); border-color: rgba(250,204,21,.35); background: rgba(250,204,21,.08); }
+  .tag.none { color: var(--bad); border-color: rgba(248,113,113,.35); background: rgba(248,113,113,.08); }
+  .tree { line-height: 1.9; }
+  .tree .box { color: #7dd3fc; }
+  @media (max-width: 700px) {
+    table { font-size: 12px; }
+    th, td { padding: 7px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AgentLens 工程实现总结</h1>
+  <div class="subtitle">基于当前代码仓库实际状态生成 · AgentLens / AgentLensKernel</div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="k">Kernel</div>
+      <div class="v">单驱动合并</div>
+    </div>
+    <div class="card">
+      <div class="k">Monitoring</div>
+      <div class="v">进程 / 线程 / 镜像 / 文件 / 注册表 / 对象 / 网络</div>
+    </div>
+    <div class="card">
+      <div class="k">Event Output</div>
+      <div class="v">Ring + Shared Memory + JSON Lines</div>
+    </div>
+    <div class="card">
+      <div class="k">Build</div>
+      <div class="v ok">Debug / Release 通过</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>总体架构</h2>
+    <div class="tree">
+      <div><span class="box">AgentLensKernel.sys</span> — 主驱动</div>
+      <div style="padding-left: 24px">
+        ├─ Control Device<br>
+        ├─ Event Ring<br>
+        ├─ Context Manager<br>
+        ├─ Policy Engine<br>
+        ├─ File Monitor / Minifilter<br>
+        ├─ Network Monitor / WFP<br>
+        ├─ Registry / Object / Process / Thread / Image Monitors<br>
+        └─ ETW Provider
+      </div>
+      <div><span class="box">AgentLensService.exe</span> — 事件消费与服务</div>
+      <div style="padding-left: 24px">
+        ├─ Control Client<br>
+        ├─ Shared Ring Reader<br>
+        ├─ JSON Lines 输出<br>
+        ├─ DNS ETW 关联<br>
+        └─ Agent Named Pipe Server
+      </div>
+      <div><span class="box">AgentLensAgent.dll</span> — 目标进程内辅助采集</div>
+      <div style="padding-left: 24px">
+        ├─ 环境 / 当前目录<br>
+        ├─ Image SHA-256<br>
+        └─ WinVerifyTrust 签名状态
+      </div>
+      <div><span class="box">AgentLensTools.exe</span> — 控制与诊断 CLI</div>
+      <div><span class="box">AgentLensEtw.exe</span> — 独立 ETW / DNS 消费者</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>模块实现状态</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>模块</th>
+          <th>状态</th>
+          <th>关键机制</th>
+          <th>主要源码</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Driver / Device</td>
+          <td><span class="tag full">已实现</span></td>
+          <td><code>DriverEntry</code>、控制设备、DACL、初始化顺序、卸载顺序</td>
+          <td><code>src/AgentLensKernel/driver.c</code></td>
+        </tr>
+        <tr>
+          <td>Process Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td><code>PsSetCreateProcessNotifyRoutineEx</code>、Token 摘要、命令行</td>
+          <td><code>agl_process_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Thread Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td><code>PsSetCreateThreadNotifyRoutine</code></td>
+          <td><code>agl_thread_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Image Monitor</td>
+          <td><span class="tag part">部分实现</span></td>
+          <td><code>PsSetLoadImageNotifyRoutine</code>、SHA-256、签名状态用户态回填</td>
+          <td><code>agl_image_monitor.c</code>、<code>AgentLensAgent/dllmain.cpp</code></td>
+        </tr>
+        <tr>
+          <td>File Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>Minifilter、CREATE/READ/WRITE/RENAME/DELETE/QUERY/SECURITY/CLOSE</td>
+          <td><code>agl_file_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Registry Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td><code>CmRegisterCallbackEx</code>、Key Context、ValueHash、枚举、持久化路径</td>
+          <td><code>agl_registry_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Object Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td><code>ObRegisterCallbacks</code>、Handle 操作</td>
+          <td><code>agl_object_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Network Monitor</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>WFP ALE Connect/Accept、Flow、Stream bytes/packets</td>
+          <td><code>agl_network_monitor.c</code></td>
+        </tr>
+        <tr>
+          <td>Event Pipeline</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>NonPaged Ring、共享内存、关键事件保护、ETW、JSON Lines</td>
+          <td><code>agl_event_ring.c</code>、<code>agl_etw.c</code></td>
+        </tr>
+        <tr>
+          <td>Context Manager</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>Process/Thread/Image/Flow/Registry Context、Tombstone、引用计数</td>
+          <td><code>agl_context.c</code></td>
+        </tr>
+        <tr>
+          <td>Policy Engine</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>Path Prefix Tree、COW Snapshot、Epoch-based Deferred Reclamation</td>
+          <td><code>agl_policy.c</code></td>
+        </tr>
+        <tr>
+          <td>IPC / Control</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>Control Device、版本校验、OpCode 校验、RequestorMode 检查</td>
+          <td><code>agl_control.c</code></td>
+        </tr>
+        <tr>
+          <td>DNS 关联</td>
+          <td><span class="tag full">已实现</span></td>
+          <td>Service 内部 DNS ETW Consumer，PID + IP → Domain</td>
+          <td><code>AgentLensService/dns_associator.cpp</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>事件覆盖</h2>
+    <table>
+      <thead>
+        <tr><th>类别</th><th>已覆盖事件</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Process</td><td>Create、Exit</td></tr>
+        <tr><td>Thread</td><td>Create、Exit</td></tr>
+        <tr><td>Image</td><td>Load</td></tr>
+        <tr><td>File</td><td>Open、Read、Write、Rename、Delete、Close、Query、Security、Directory</td></tr>
+        <tr><td>Registry</td><td>Open、Query、Set Value、Enum Key、Enum Value、Delete Key、Delete Value</td></tr>
+        <tr><td>Object</td><td>Handle Create / Duplicate / Protection</td></tr>
+        <tr><td>Network</td><td>Connect、Flow Established、Flow Closed、Bytes/Packets</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>核心设计</h2>
+    <ul>
+      <li><strong>单驱动：</strong>主控制设备 + Minifilter + WFP callout 合并，避免跨驱动通信。</li>
+      <li><strong>事件优先：</strong>内核只做可信观察和必要控制，分析在用户态。</li>
+      <li><strong>低锁策略热路径：</strong>COW immutable snapshot + path prefix tree + epoch-based deferred reclamation。</li>
+      <li><strong>上下文生命周期：</strong>引用计数、PID+CreateTime 校验、tombstone 延迟释放。</li>
+      <li><strong>Registry Query：</strong>PostQuery 从调用者输出缓冲安全计算 ValueHash，避免热路径 ZwQueryValueKey 重入。</li>
+      <li><strong>DNS 关联：</strong>用户态 ETW 消费 DNS Client，输出 remote_ip / dns_name。</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>当前构建与产物</h2>
+    <pre>AgentLensKernel.sys
+AgentLensService.exe
+AgentLensAgent.dll
+AgentLensTools.exe
+AgentLensEtw.exe
+
+Debug x64   → 通过
+Release x64 → 通过</pre>
+  </div>
+
+  <div class="panel">
+    <h2>尚未完成</h2>
+    <table>
+      <thead>
+        <tr><th>项目</th><th>状态</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>真实 Driver Verifier</td><td><span class="tag none">未验证</span></td><td>需在测试 VM 运行</td></tr>
+        <tr><td>IOCTL / Policy Fuzz</td><td><span class="tag none">未验证</span></td><td>已有脚本，需执行并记录</td></tr>
+        <tr><td>安装 / 卸载 / 重载压力</td><td><span class="tag none">未验证</span></td><td>需专用 VM</td></tr>
+        <tr><td>高并发事件压力</td><td><span class="tag none">未验证</span></td><td>需真实负载</td></tr>
+        <tr><td>生产签名 / Catalog</td><td><span class="tag none">未完成</span></td><td>当前测试签名</td></tr>
+        <tr><td>事件持久化后端</td><td><span class="tag part">部分</span></td><td>JSONL 输出存在，后端存储未实现</td></tr>
+        <tr><td>AgentLensAgent 调用栈 / 脚本上下文</td><td><span class="tag part">部分</span></td><td>基础环境与镜像上下文完成</td></tr>
+        <tr><td>性能基准 / 计数器</td><td><span class="tag none">未完成</span></td><td>尚未形成基准数据</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>安全提示</h2>
+    <p>当前仍处于研发阶段。驱动使用测试签名，禁止加载到生产系统。所有验证必须在隔离测试 VM 中执行。</p>
+  </div>
+</div>
+</body>
+</html>
