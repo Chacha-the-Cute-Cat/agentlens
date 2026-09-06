@@ -1,66 +1,79 @@
 # AgentLens v0.1
 
-当前实现是基于 `docs/agentlens/ARCHITECTURE.md` 的 VS2022 工程骨架和首个可编译闭环。
+AgentLens is a Windows runtime security project for observing, correlating, and controlling process, file, registry, and network behavior.
 
-## 已实现
+This implementation is a Visual Studio 2022 scaffold based on `docs/agentlens/ARCHITECTURE.md`.
+
+## Implemented
 
 - `AgentLensKernel.sys`
-  - 控制设备 `\Device\AgentLensControl`
-- 事件 ring
-- 进程/线程/镜像/注册表/对象监控
-- 文件 Minifilter 监控
-- 策略加载接口
-- 文件/注册表 Open/Create 控制策略
-- Event Ring 共享内存映射
+  - Control device `\Device\AgentLensControl`
+  - Event ring
+  - Shared memory event mapping
+  - Process / thread / image monitors
+  - Registry monitor
+  - Object monitor
+  - File system minifilter monitor
+  - WFP ALE callouts
+  - Policy loading
+  - File / registry / process / network policy controls
+
 - `AgentLensService.exe`
-  - 控制通道客户端
-  - 事件读取和打印
-  - 策略加载接口
+  - Control channel client
+  - Event reader and JSON output
+  - Named pipe server for `AgentLensAgent`
+  - Policy loading
+
 - `AgentLensAgent.dll`
-  - 空骨架，后续接入用户态辅助采集
+  - User-mode agent with basic process context collection
+
 - `AgentLensTools.exe`
-  - 版本、统计、订阅控制工具
-- `AgentLensKernel.sys` 已合并 WFP ALE callout
-  - Connect / Recv Accept V4/V6
+  - Control and diagnostic CLI
 
-## 尚未实现
+## Not Implemented Yet
 
-- 命令行上下文增强、ETW、签名验证、安装器。
+- Full ETW integration
+- Production driver signing
+- Production installer
+- Long-running Driver Verifier validation
+- Advanced command context and correlation
 
-## 构建
+## Build
 
 ```cmd
 msbuild AgentLens.sln /t:Build /p:Configuration=Debug /p:Platform=x64 /m
 ```
 
-或执行：
+Or:
 
 ```cmd
 build.cmd Debug
 ```
 
-## 运行
+## Run
 
-1. 在测试环境加载 `AgentLensKernel.sys`。
-2. 以管理员运行：
+1. Load `AgentLensKernel.sys` in a test environment.
+2. Run the service as administrator:
 
 ```cmd
 AgentLensService.exe --console
 ```
 
-3. 查看进程/线程/镜像/文件/注册表事件。
+3. Observe process, thread, image, file, registry, and network events.
 
-## 安装 / 签名
+## Install / Sign
 
-见 `installer/README.md`。
+See `installer/README.md`.
 
-控制工具：
+## Control CLI
 
 ```cmd
 AgentLensTools.exe --version
 AgentLensTools.exe --stats
 AgentLensTools.exe --policy <binary-policy-file>
+AgentLensTools.exe --text-policy <text-policy-file>
 AgentLensTools.exe --clear-policy
+AgentLensTools.exe --selftest
 AgentLensTools.exe --driver-stop
 AgentLensTools.exe --driver-start
 AgentLensTools.exe --driver-restart
