@@ -86,6 +86,7 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
         ULONG accessMask = 0;
         ULONG imageHash = 0;
         ULONG userSidHash = 0;
+        ULONG rootProcessHash = 0;
         std::wstring path;
         std::wstring process;
         std::wstring commandLine;
@@ -194,6 +195,10 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
                 {
                     current->userSidHash = static_cast<ULONG>(wcstoul(value.c_str(), nullptr, 0));
                 }
+                else if (key == L"roothash")
+                {
+                    current->rootProcessHash = static_cast<ULONG>(wcstoul(value.c_str(), nullptr, 0));
+                }
                 else if (key == L"command")
                 {
                     current->commandLine = value;
@@ -243,6 +248,7 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
         out->AccessMask = rule.accessMask;
         out->ImageHash = rule.imageHash;
         out->UserSidHash = rule.userSidHash;
+        out->RootProcessHash = rule.rootProcessHash;
         out->PathLength = pathBytes;
         out->ProcessLength = processBytes;
         out->CommandLineLength = commandBytes;

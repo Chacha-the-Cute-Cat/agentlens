@@ -14,6 +14,7 @@ typedef struct _AGL_POLICY_ENTRY {
     ULONG AccessMask;
     ULONG ImageHash;
     ULONG UserSidHash;
+    ULONG RootProcessHash;
     ULONG PathLength;
     ULONG ProcessLength;
     ULONG CommandLineLength;
@@ -676,6 +677,7 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
         entry->AccessMask = rule->AccessMask;
         entry->ImageHash = rule->ImageHash;
         entry->UserSidHash = rule->UserSidHash;
+        entry->RootProcessHash = rule->RootProcessHash;
         entry->PathLength = pathBytes / sizeof(WCHAR);
         entry->ProcessLength = processBytes / sizeof(WCHAR);
         entry->CommandLineLength = commandBytes / sizeof(WCHAR);
@@ -741,8 +743,10 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
 {
     BOOLEAN deny = FALSE;
     AGL_PROCESS_CTX* processCtx = NULL;
+    AGL_PROCESS_CTX* rootCtx = NULL;
     UNICODE_STRING processPath = { 0 };
     UNICODE_STRING commandLine = { 0 };
+    ULONG rootProcessHash = 0;
     LONG readerEpoch;
     ULONG candidates[AGL_MAX_POLICY_RULES];
     ULONG candidateCount;
@@ -754,6 +758,11 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
     {
         processPath = processCtx->ImagePath;
         commandLine = processCtx->CommandLine;
+        rootCtx = AglContextAcquireRootByAgentSessionId(processCtx->AgentSessionId);
+        if (rootCtx)
+        {
+            rootProcessHash = AglHashUnicodeString(&rootCtx->ImagePath);
+        }
     }
 
     readerEpoch = AglPolicyReaderEnter();
@@ -764,6 +773,7 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
     if (!snapshot || snapshot->Mode != AGL_POLICY_MODE_CONTROL)
     {
         AglPolicyReaderLeave(readerEpoch);
+        if (rootCtx) AglContextReleaseProcess(rootCtx);
         if (processCtx) AglContextReleaseProcess(processCtx);
         return FALSE;
     }
@@ -802,6 +812,12 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
             continue;
         }
 
+        if (entry->RootProcessHash &&
+            (!rootCtx || rootProcessHash != entry->RootProcessHash))
+        {
+            continue;
+        }
+
         if (entry->CommandLineLength &&
             !AglMatchString(entry->CommandLine, entry->CommandLineLength, &commandLine))
         {
@@ -822,6 +838,10 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
     }
 
     AglPolicyReaderLeave(readerEpoch);
+    if (rootCtx)
+    {
+        AglContextReleaseProcess(rootCtx);
+    }
     if (processCtx)
     {
         AglContextReleaseProcess(processCtx);

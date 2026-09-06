@@ -26,6 +26,7 @@ typedef struct _AGL_POLICY_RULE {
     unsigned long AccessMask;
     unsigned long ImageHash;
     unsigned long UserSidHash;
+    unsigned long RootProcessHash;
     unsigned long PathLength;
     unsigned long ProcessLength;
     unsigned long CommandLineLength;

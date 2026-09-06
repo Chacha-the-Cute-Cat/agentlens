@@ -26,6 +26,7 @@ static void PrintUsage()
     wprintf(L"  --selftest\n");
     wprintf(L"  --fuzz-ioctl <count>\n");
     wprintf(L"  --fuzz-policy <count>\n");
+    wprintf(L"  --agent-tag <pid> <conversation> <toolcall>\n");
     wprintf(L"  --stream-stats\n");
 }
 
@@ -477,6 +478,28 @@ int wmain(int argc, wchar_t* argv[])
     else if (lstrcmpiW(argv[1], L"--fuzz-policy") == 0 && argc >= 3)
     {
         RunFuzzPolicy(device, static_cast<ULONG>(_wtoi(argv[2])));
+    }
+    else if (lstrcmpiW(argv[1], L"--agent-tag") == 0 && argc >= 5)
+    {
+        AGL_AGENT_TAG_UPDATE update{};
+        update.ProcessId = _wcstoui64(argv[2], nullptr, 0);
+        update.ConversationId = _wcstoui64(argv[3], nullptr, 0);
+        update.ToolCallId = _wcstoui64(argv[4], nullptr, 0);
+        if (SendControl(
+                device,
+                AGL_OP_UPDATE_AGENT_TAG,
+                &update,
+                sizeof(update),
+                nullptr,
+                0,
+                returned))
+        {
+            wprintf(L"Agent tag updated.\n");
+        }
+        else
+        {
+            wprintf(L"Agent tag update failed.\n");
+        }
     }
     else if (lstrcmpiW(argv[1], L"--stream-stats") == 0)
     {

@@ -242,6 +242,24 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
 
     if (!ctx)
     {
+        ULONG64 agentSessionId = CorrelationId;
+        PLIST_ENTRY parentEntry;
+
+        for (parentEntry = AglContext.ProcessList.Flink;
+             parentEntry != &AglContext.ProcessList;
+             parentEntry = parentEntry->Flink)
+        {
+            AGL_PROCESS_CTX* parentCtx = CONTAINING_RECORD(
+                parentEntry,
+                AGL_PROCESS_CTX,
+                ListEntry);
+            if (parentCtx->ProcessId == ParentProcessId)
+            {
+                agentSessionId = parentCtx->AgentSessionId;
+                break;
+            }
+        }
+
         ctx = AglAllocNonPaged(sizeof(*ctx));
         if (ctx)
         {
@@ -251,7 +269,7 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
             ctx->CreateTime = CreateTime;
             ctx->CorrelationId = CorrelationId;
             ctx->ParentCorrelationId = ParentCorrelationId;
-            ctx->AgentSessionId = CorrelationId;
+            ctx->AgentSessionId = agentSessionId;
             ctx->SessionId = SessionId;
             ctx->RefCount = 1;
             ctx->Version = 1;
@@ -319,6 +337,21 @@ void AglContextUpdateProcess(ULONG64 ProcessId, ULONG EnvironmentHash, PCUNICODE
     }
 }
 
+void AglContextUpdateAgentTag(
+    ULONG64 ProcessId,
+    ULONG64 ConversationId,
+    ULONG64 ToolCallId)
+{
+    AGL_PROCESS_CTX* ctx = AglContextAcquireProcess(ProcessId);
+
+    if (ctx)
+    {
+        ctx->ConversationId = ConversationId;
+        ctx->ToolCallId = ToolCallId;
+        AglContextReleaseProcess(ctx);
+    }
+}
+
 ULONG64 AglContextNextCorrelationId(void)
 {
     return InterlockedIncrement64((LONG64*)&AglContext.NextCorrelationId);
@@ -336,6 +369,77 @@ ULONG64 AglContextGetCorrelationId(ULONG64 ProcessId)
     }
 
     return correlationId;
+}
+
+ULONG64 AglContextGetAgentSessionId(ULONG64 ProcessId)
+{
+    AGL_PROCESS_CTX* ctx = AglContextAcquireProcess(ProcessId);
+    ULONG64 agentSessionId = 0;
+
+    if (ctx)
+    {
+        agentSessionId = ctx->AgentSessionId;
+        AglContextReleaseProcess(ctx);
+    }
+
+    return agentSessionId;
+}
+
+void AglContextGetAgentTag(
+    ULONG64 ProcessId,
+    PULONG64 ConversationId,
+    PULONG64 ToolCallId)
+{
+    AGL_PROCESS_CTX* ctx = AglContextAcquireProcess(ProcessId);
+
+    if (ConversationId)
+    {
+        *ConversationId = 0;
+    }
+    if (ToolCallId)
+    {
+        *ToolCallId = 0;
+    }
+
+    if (ctx)
+    {
+        if (ConversationId)
+        {
+            *ConversationId = ctx->ConversationId;
+        }
+        if (ToolCallId)
+        {
+            *ToolCallId = ctx->ToolCallId;
+        }
+        AglContextReleaseProcess(ctx);
+    }
+}
+
+AGL_PROCESS_CTX* AglContextAcquireRootByAgentSessionId(ULONG64 AgentSessionId)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    PLIST_ENTRY entry;
+    AGL_PROCESS_CTX* rootCtx = NULL;
+
+    KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
+    for (entry = AglContext.ProcessList.Flink;
+         entry != &AglContext.ProcessList;
+         entry = entry->Flink)
+    {
+        AGL_PROCESS_CTX* item = CONTAINING_RECORD(
+            entry,
+            AGL_PROCESS_CTX,
+            ListEntry);
+        if (item->AgentSessionId == AgentSessionId &&
+            item->CorrelationId == AgentSessionId)
+        {
+            item->RefCount++;
+            rootCtx = item;
+            break;
+        }
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+    return rootCtx;
 }
 
 AGL_THREAD_CTX* AglContextGetOrCreateThread(ULONG64 ProcessId, ULONG64 ThreadId)

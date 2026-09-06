@@ -11,6 +11,8 @@ typedef struct _AGL_PROCESS_CTX {
     ULONG64 CorrelationId;
     ULONG64 ParentCorrelationId;
     ULONG64 AgentSessionId;
+    ULONG64 ConversationId;
+    ULONG64 ToolCallId;
     ULONG64 ExitTime;
     PVOID   TokenSnapshot;
     ULONG   TokenSidHash;
@@ -104,8 +106,12 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
 
 void AglContextRemoveProcess(ULONG64 ProcessId);
 void AglContextUpdateProcess(ULONG64 ProcessId, ULONG EnvironmentHash, PCUNICODE_STRING CurrentDirectory);
+void AglContextUpdateAgentTag(ULONG64 ProcessId, ULONG64 ConversationId, ULONG64 ToolCallId);
 ULONG64 AglContextNextCorrelationId(void);
 ULONG64 AglContextGetCorrelationId(ULONG64 ProcessId);
+ULONG64 AglContextGetAgentSessionId(ULONG64 ProcessId);
+void AglContextGetAgentTag(ULONG64 ProcessId, PULONG64 ConversationId, PULONG64 ToolCallId);
+AGL_PROCESS_CTX* AglContextAcquireRootByAgentSessionId(ULONG64 AgentSessionId);
 
 AGL_THREAD_CTX* AglContextGetOrCreateThread(ULONG64 ProcessId, ULONG64 ThreadId);
 void AglContextRemoveThread(ULONG64 ThreadId);

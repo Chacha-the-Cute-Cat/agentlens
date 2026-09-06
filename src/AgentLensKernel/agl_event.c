@@ -75,13 +75,31 @@ NTSTATUS AglEventEmit(
     recordHeader->Flags = 0;
     recordHeader->Reserved = 0;
 
+    header = (AGL_EVENT_HEADER*)(buffer + sizeof(AGL_RING_RECORD_HEADER));
+    RtlZeroMemory(header, sizeof(*header));
+
     if (CorrelationId == 0 && ProcessId != 0)
     {
         CorrelationId = AglContextGetCorrelationId(ProcessId);
     }
 
-    header = (AGL_EVENT_HEADER*)(buffer + sizeof(AGL_RING_RECORD_HEADER));
-    RtlZeroMemory(header, sizeof(*header));
+    header->AgentSessionId = ProcessId
+        ? AglContextGetAgentSessionId(ProcessId)
+        : 0;
+    {
+        ULONG64 conversationId = 0;
+        ULONG64 toolCallId = 0;
+        if (ProcessId)
+        {
+            AglContextGetAgentTag(
+                ProcessId,
+                &conversationId,
+                &toolCallId);
+        }
+        header->ConversationId = conversationId;
+        header->ToolCallId = toolCallId;
+    }
+
     header->StructSize = sizeof(*header);
     header->Version = AGL_PROTOCOL_VERSION;
     header->EventType = EventType;

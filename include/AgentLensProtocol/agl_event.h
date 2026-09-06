@@ -38,7 +38,7 @@ typedef enum _AGL_EVENT_TYPE {
 } AGL_EVENT_TYPE;
 
 #define AGL_EVENT_RING_MAGIC 0x676C4145 // 'EAgL' little-endian
-#define AGL_EVENT_SCHEMA_VERSION 2
+#define AGL_EVENT_SCHEMA_VERSION 4
 
 typedef struct _AGL_RING_RECORD_HEADER {
     unsigned long RecordLength; // total bytes, including this header
@@ -69,6 +69,9 @@ typedef struct _AGL_EVENT_HEADER {
     unsigned long long ParentProcessId;
     unsigned long long CorrelationId;
     unsigned long      SessionId;
+    unsigned long long AgentSessionId;
+    unsigned long long ConversationId;
+    unsigned long long ToolCallId;
     unsigned long      Flags;
     unsigned long      PayloadLength;
 } AGL_EVENT_HEADER;

@@ -409,6 +409,31 @@ static NTSTATUS AglControlUpdateImageContext(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS AglControlUpdateAgentTag(
+    PVOID SystemBuffer,
+    ULONG InputLength,
+    ULONG OutputLength,
+    AGL_CONTROL_HEADER* Header,
+    PULONG_PTR Information)
+{
+    AGL_AGENT_TAG_UPDATE* update =
+        (AGL_AGENT_TAG_UPDATE*)((PUCHAR)SystemBuffer + Header->StructSize);
+
+    UNREFERENCED_PARAMETER(OutputLength);
+    UNREFERENCED_PARAMETER(Information);
+
+    if (InputLength < Header->StructSize + sizeof(AGL_AGENT_TAG_UPDATE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    AglContextUpdateAgentTag(
+        update->ProcessId,
+        update->ConversationId,
+        update->ToolCallId);
+    return STATUS_SUCCESS;
+}
+
 static const AGL_CONTROL_OPERATION AglControlOperations[] = {
     { AGL_OP_GET_VERSION, 0, sizeof(AGL_VERSION_INFO), AglControlGetVersion },
     { AGL_OP_SUBSCRIBE_EVENTS, 0, 0, AglControlSubscribe },
@@ -419,6 +444,7 @@ static const AGL_CONTROL_OPERATION AglControlOperations[] = {
     { AGL_OP_LOAD_POLICY, 0, 0, AglControlLoadPolicy },
     { AGL_OP_CLEAR_POLICY, 0, 0, AglControlClearPolicy },
     { AGL_OP_UPDATE_CONTEXT, sizeof(AGL_CONTEXT_UPDATE), 0, AglControlUpdateContext },
+    { AGL_OP_UPDATE_AGENT_TAG, sizeof(AGL_AGENT_TAG_UPDATE), 0, AglControlUpdateAgentTag },
     { AGL_OP_GET_STREAM_STATS, 0, sizeof(AGL_STREAM_STATS), AglControlGetStreamStats },
     { AGL_OP_UPDATE_IMAGE_CONTEXT, sizeof(AGL_IMAGE_UPDATE), 0, AglControlUpdateImageContext },
 };

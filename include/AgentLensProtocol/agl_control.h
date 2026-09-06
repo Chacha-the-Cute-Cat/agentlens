@@ -48,6 +48,7 @@ typedef enum _AGL_OPCODE {
     AGL_OP_CLEAR_POLICY,
     AGL_OP_UPDATE_CONTEXT,
     AGL_OP_UPDATE_IMAGE_CONTEXT,
+    AGL_OP_UPDATE_AGENT_TAG,
     AGL_OP_GET_STREAM_STATS,
     AGL_OP_MAX
 } AGL_OPCODE;
@@ -113,6 +114,12 @@ typedef struct _AGL_IMAGE_UPDATE {
     unsigned char      FileSha256[32];
     unsigned long      SignerState;
 } AGL_IMAGE_UPDATE;
+
+typedef struct _AGL_AGENT_TAG_UPDATE {
+    unsigned long long ProcessId;
+    unsigned long long ConversationId;
+    unsigned long long ToolCallId;
+} AGL_AGENT_TAG_UPDATE;
 
 #define AGL_SIGNER_STATE_UNKNOWN  0
 #define AGL_SIGNER_STATE_UNSIGNED 1

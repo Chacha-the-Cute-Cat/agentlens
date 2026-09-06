@@ -271,6 +271,9 @@ void EventReader::PrintJsonEvents(
         json += L"\"tid\":" + std::to_wstring(header->ThreadId) + L",";
         json += L"\"parent_pid\":" + std::to_wstring(header->ParentProcessId) + L",";
         json += L"\"correlation\":" + std::to_wstring(header->CorrelationId) + L",";
+        json += L"\"agent_session\":" + std::to_wstring(header->AgentSessionId) + L",";
+        json += L"\"conversation_id\":" + std::to_wstring(header->ConversationId) + L",";
+        json += L"\"tool_call_id\":" + std::to_wstring(header->ToolCallId) + L",";
         json += L"\"status\":\"" + std::to_wstring(header->ResultStatus) + L"\",";
         json += L"\"flags\":" + std::to_wstring(header->Flags) + L",";
         json += L"\"payload_bytes\":" + std::to_wstring(payloadLength);
