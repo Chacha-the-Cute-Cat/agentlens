@@ -65,6 +65,36 @@ namespace
         }
         return false;
     }
+
+    bool NormalizeKernelPath(std::wstring& value, std::wstring& error, int lineNumber)
+    {
+        if (value.size() < 3 ||
+            !std::iswalpha(value[0]) ||
+            value[1] != L':' ||
+            (value[2] != L'\\' && value[2] != L'/'))
+        {
+            return true;
+        }
+
+        wchar_t drive[3] = { value[0], L':', L'\0' };
+        wchar_t device[1024] = { 0 };
+        if (QueryDosDeviceW(drive, device, ARRAYSIZE(device)) == 0)
+        {
+            error = L"Line " + std::to_wstring(lineNumber) +
+                L": cannot resolve drive " + std::wstring(drive) + L".";
+            return false;
+        }
+
+        value = std::wstring(device) + L"\\" + value.substr(3);
+        for (wchar_t& ch : value)
+        {
+            if (ch == L'/')
+            {
+                ch = L'\\';
+            }
+        }
+        return true;
+    }
 }
 
 bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, std::wstring& error)
@@ -167,6 +197,18 @@ bool CompileTextPolicy(const wchar_t* path, std::vector<uint8_t>& binaryPolicy, 
             {
                 std::wstring key = Trim(trimmed.substr(0, eq));
                 std::wstring value = Trim(trimmed.substr(eq + 1));
+                if ((key == L"path" || key == L"process" || key == L"command") &&
+                    value.find_first_of(L"*?") != std::wstring::npos)
+                {
+                    error = L"Line " + std::to_wstring(lineNumber) +
+                        L": wildcards are not supported; use a literal prefix.";
+                    return false;
+                }
+                if ((key == L"path" || key == L"process") &&
+                    !NormalizeKernelPath(value, error, lineNumber))
+                {
+                    return false;
+                }
                 if (key == L"path")
                 {
                     current->path = value;

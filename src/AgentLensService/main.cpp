@@ -60,6 +60,10 @@ int wmain(int argc, wchar_t* argv[])
         {
             replayPath = argv[++i];
         }
+        else if (lstrcmpiW(argv[i], L"--policy") == 0 && i + 1 < argc)
+        {
+            SetPolicyPath(argv[++i]);
+        }
     }
 
     if (replayPath)

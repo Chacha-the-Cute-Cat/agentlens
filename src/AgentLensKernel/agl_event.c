@@ -4,17 +4,6 @@
 #include "agl_util.h"
 #include "agl_etw.h"
 
-static volatile LONG AglSampleCounter = 0;
-
-static BOOLEAN AglShouldSampleEvent(ULONG EventType)
-{
-    if (EventType == AGL_EVENT_FILE_READ || EventType == AGL_EVENT_FILE_WRITE)
-    {
-        return (InterlockedIncrement(&AglSampleCounter) % 10) != 0;
-    }
-    return FALSE;
-}
-
 static ULONG AglEventFlags(ULONG EventType)
 {
     if (EventType == AGL_EVENT_PROCESS_CREATE ||
@@ -55,11 +44,6 @@ NTSTATUS AglEventEmit(
     AGL_RING_RECORD_HEADER* recordHeader;
     AGL_EVENT_HEADER* header;
     NTSTATUS status;
-
-    if (AglShouldSampleEvent(EventType))
-    {
-        return STATUS_SUCCESS;
-    }
 
     if (total > AGL_MAX_EVENT_PAYLOAD + sizeof(AGL_EVENT_HEADER))
     {

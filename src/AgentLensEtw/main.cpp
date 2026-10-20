@@ -436,11 +436,10 @@ void HandleAgentLensEvent(PEVENT_RECORD eventRecord)
     }
 
     if (header->EventType == AGL_EVENT_NETWORK_CONNECT &&
-        eventRecord->UserDataLength >= sizeof(AGL_EVENT_HEADER) + sizeof(AGL_NETWORK_EVENT))
+        eventRecord->UserDataLength >= sizeof(AGL_NETWORK_EVENT))
     {
         const AGL_NETWORK_EVENT* network =
-            reinterpret_cast<const AGL_NETWORK_EVENT*>(
-                reinterpret_cast<const BYTE*>(eventRecord->UserData) + sizeof(AGL_EVENT_HEADER));
+            reinterpret_cast<const AGL_NETWORK_EVENT*>(eventRecord->UserData);
         std::wstring ip = IPv4FromMappedAddress(network->RemoteAddress);
         std::wstring dnsName = FindDnsName(
             static_cast<unsigned long>(header->ProcessId), ip);

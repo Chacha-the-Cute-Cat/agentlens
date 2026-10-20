@@ -3,8 +3,14 @@ Signature   = "$WINDOWS NT$"
 Class       = System
 ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
 Provider    = %ProviderName%
-DriverVer   = 07/01/2026,0.1.0.0
+DriverVer   = 10/20/2026,0.1.0.0
 CatalogFile = AgentLensKernel.cat
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+AgentLensKernel.sys = 1,,
 
 [DestinationDirs]
 DefaultDestDir = 12
@@ -28,3 +34,4 @@ ServiceBinary  = %12%\AgentLensKernel.sys
 [Strings]
 ProviderName      = "AgentLens"
 ServiceDisplayName = "AgentLens Kernel"
+DiskName           = "AgentLens Driver Package"

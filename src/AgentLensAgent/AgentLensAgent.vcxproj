@@ -18,7 +18,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -32,10 +32,16 @@
   <PropertyGroup>
     <OutDir>$(SolutionDir)build\AgentLensAgent\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)build\obj\AgentLensAgent\$(Platform)\$(Configuration)\</IntDir>
+    <AgentLensSpectreMitigation Condition="'$(AgentLensSpectreMitigation)' == '' and Exists('$(VC_LibraryPath_VC_Desktop_CurrentPlatform_spectre)')">true</AgentLensSpectreMitigation>
+    <AgentLensSpectreMitigation Condition="'$(AgentLensSpectreMitigation)' == ''">false</AgentLensSpectreMitigation>
+    <SpectreMitigation>$(AgentLensSpectreMitigation)</SpectreMitigation>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <SpectreMitigation>$(AgentLensSpectreMitigation)</SpectreMitigation>
       <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>

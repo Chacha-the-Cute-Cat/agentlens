@@ -18,9 +18,9 @@ typedef struct _AGL_POLICY_ENTRY {
     ULONG PathLength;
     ULONG ProcessLength;
     ULONG CommandLineLength;
-    WCHAR Path[AGL_MAX_PATH_CHARS];
-    WCHAR Process[AGL_MAX_PATH_CHARS];
-    WCHAR CommandLine[AGL_MAX_PATH_CHARS];
+    PWCHAR Path;
+    PWCHAR Process;
+    PWCHAR CommandLine;
 } AGL_POLICY_ENTRY;
 
 typedef struct _AGL_POLICY_TRIE_RULE_REF {
@@ -45,6 +45,7 @@ typedef struct _AGL_POLICY_TRIE {
 } AGL_POLICY_TRIE;
 
 typedef struct _AGL_POLICY_SNAPSHOT {
+    volatile LONG RefCount;
     AGL_POLICY_ENTRY Rules[AGL_MAX_POLICY_RULES];
     ULONG Count;
     ULONG Mode;
@@ -55,10 +56,47 @@ typedef struct _AGL_POLICY_SNAPSHOT {
 
 static KSPIN_LOCK AglPolicyLock;
 static AGL_POLICY_SNAPSHOT* AglActivePolicy = NULL;
-static volatile LONG AglPolicyCurrentEpoch = 0;
-static volatile LONG64 AglPolicyEpochReaders[3] = { 0, 0, 0 };
 
 static BOOLEAN AglPolicyRuleLess(AGL_POLICY_ENTRY* A, AGL_POLICY_ENTRY* B);
+
+static PWCHAR AglPolicyCopyString(const WCHAR* Source, ULONG Bytes)
+{
+    PWCHAR buffer;
+
+    if (!Source || Bytes == 0)
+    {
+        return NULL;
+    }
+
+    buffer = (PWCHAR)AglAllocNonPaged(Bytes + sizeof(WCHAR));
+    if (!buffer)
+    {
+        return NULL;
+    }
+
+    RtlCopyMemory(buffer, Source, Bytes);
+    buffer[Bytes / sizeof(WCHAR)] = L'\0';
+    return buffer;
+}
+
+static void AglPolicyFreeEntry(AGL_POLICY_ENTRY* Entry)
+{
+    if (Entry->Path)
+    {
+        AglFree(Entry->Path);
+        Entry->Path = NULL;
+    }
+    if (Entry->Process)
+    {
+        AglFree(Entry->Process);
+        Entry->Process = NULL;
+    }
+    if (Entry->CommandLine)
+    {
+        AglFree(Entry->CommandLine);
+        Entry->CommandLine = NULL;
+    }
+}
 
 static void AglPolicySortRules(AGL_POLICY_SNAPSHOT* Snapshot)
 {
@@ -105,70 +143,61 @@ static void AglPolicyTrieFree(AGL_POLICY_TRIE* Trie)
 
 static void AglPolicyFreeSnapshot(AGL_POLICY_SNAPSHOT* Snapshot)
 {
+    ULONG i;
+
     if (!Snapshot)
     {
         return;
     }
 
+    for (i = 0; i < Snapshot->Count; i++)
+    {
+        AglPolicyFreeEntry(&Snapshot->Rules[i]);
+    }
     AglPolicyTrieFree(&Snapshot->PathTrie);
     AglFree(Snapshot);
 }
 
-static LONG AglPolicyReaderEnter(void)
-{
-    LONG epoch = InterlockedCompareExchange(
-        (volatile LONG*)&AglPolicyCurrentEpoch,
-        0,
-        0);
-    InterlockedIncrement64(&AglPolicyEpochReaders[epoch]);
-    KeMemoryBarrier();
-    return epoch;
-}
-
-static void AglPolicyReaderLeave(LONG Epoch)
-{
-    KeMemoryBarrier();
-    InterlockedDecrement64(&AglPolicyEpochReaders[Epoch]);
-}
-
-static void AglPolicyWaitForEpoch(LONG Epoch)
-{
-    while (InterlockedCompareExchange64(
-               &AglPolicyEpochReaders[Epoch],
-               0,
-               0) != 0)
-    {
-        YieldProcessor();
-    }
-}
-
 static AGL_POLICY_SNAPSHOT* AglPolicyPublishSnapshot(
-    AGL_POLICY_SNAPSHOT* NewSnapshot,
-    PLONG RetiredEpoch)
+    AGL_POLICY_SNAPSHOT* NewSnapshot)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
     AGL_POLICY_SNAPSHOT* oldSnapshot;
-    LONG oldEpoch;
 
     KeAcquireInStackQueuedSpinLock(&AglPolicyLock, &lockHandle);
     oldSnapshot = AglActivePolicy;
-    InterlockedExchangePointer(
-        (PVOID volatile*)&AglActivePolicy,
-        (PVOID)NewSnapshot);
-    oldEpoch = InterlockedCompareExchange(
-        (volatile LONG*)&AglPolicyCurrentEpoch,
-        0,
-        0);
-    InterlockedExchange(
-        (volatile LONG*)&AglPolicyCurrentEpoch,
-        (oldEpoch + 1) % 3);
+    AglActivePolicy = NewSnapshot;
     KeReleaseInStackQueuedSpinLock(&lockHandle);
 
-    if (RetiredEpoch)
-    {
-        *RetiredEpoch = oldEpoch;
-    }
     return oldSnapshot;
+}
+
+static AGL_POLICY_SNAPSHOT* AglPolicyAcquireSnapshot(void)
+{
+    KLOCK_QUEUE_HANDLE lockHandle;
+    AGL_POLICY_SNAPSHOT* snapshot;
+
+    KeAcquireInStackQueuedSpinLock(&AglPolicyLock, &lockHandle);
+    snapshot = AglActivePolicy;
+    if (snapshot)
+    {
+        InterlockedIncrement(&snapshot->RefCount);
+    }
+    KeReleaseInStackQueuedSpinLock(&lockHandle);
+    return snapshot;
+}
+
+static void AglPolicyReleaseSnapshot(AGL_POLICY_SNAPSHOT* Snapshot)
+{
+    if (!Snapshot)
+    {
+        return;
+    }
+
+    if (InterlockedDecrement(&Snapshot->RefCount) == 0)
+    {
+        AglPolicyFreeSnapshot(Snapshot);
+    }
 }
 
 static BOOLEAN AglPolicyTrieEnsureNodeCapacity(AGL_POLICY_TRIE* Trie, ULONG Needed)
@@ -583,15 +612,8 @@ NTSTATUS AglPolicyInitialize(void)
 
 void AglPolicyUninitialize(void)
 {
-    AGL_POLICY_SNAPSHOT* oldSnapshot = NULL;
-    LONG retiredEpoch = 0;
-
-    oldSnapshot = AglPolicyPublishSnapshot(NULL, &retiredEpoch);
-    if (oldSnapshot)
-    {
-        AglPolicyWaitForEpoch(retiredEpoch);
-        AglPolicyFreeSnapshot(oldSnapshot);
-    }
+    AGL_POLICY_SNAPSHOT* oldSnapshot = AglPolicyPublishSnapshot(NULL);
+    AglPolicyReleaseSnapshot(oldSnapshot);
 }
 
 NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
@@ -600,7 +622,6 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
     PUCHAR cursor;
     ULONG remaining;
     ULONG i;
-    LONG retiredEpoch = 0;
     AGL_POLICY_SNAPSHOT* snapshot = NULL;
     AGL_POLICY_SNAPSHOT* oldSnapshot = NULL;
 
@@ -631,6 +652,7 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     RtlZeroMemory(snapshot, sizeof(*snapshot));
+    snapshot->RefCount = 1;
 
     cursor = (PUCHAR)Policy + header->StructSize;
     remaining = PolicyLength - header->StructSize;
@@ -662,6 +684,12 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
             return STATUS_INVALID_PARAMETER;
         }
 
+        if (((pathBytes | processBytes | commandBytes) & 1) != 0)
+        {
+            AglPolicyFreeSnapshot(snapshot);
+            return STATUS_INVALID_PARAMETER;
+        }
+
         if (remaining < sizeof(AGL_POLICY_RULE) + pathBytes + processBytes + commandBytes)
         {
             AglPolicyFreeSnapshot(snapshot);
@@ -670,6 +698,7 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
 
         entry = &snapshot->Rules[i];
         RtlZeroMemory(entry, sizeof(*entry));
+        snapshot->Count = i + 1;
         entry->EventType = rule->EventType;
         entry->Action = rule->Action;
         entry->RuleSet = rule->RuleSet;
@@ -682,30 +711,25 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
         entry->ProcessLength = processBytes / sizeof(WCHAR);
         entry->CommandLineLength = commandBytes / sizeof(WCHAR);
 
-        if (pathBytes)
+        entry->Path = AglPolicyCopyString((const WCHAR*)rule->Data, pathBytes);
+        entry->Process = AglPolicyCopyString(
+            (const WCHAR*)((PUCHAR)rule->Data + pathBytes),
+            processBytes);
+        entry->CommandLine = AglPolicyCopyString(
+            (const WCHAR*)((PUCHAR)rule->Data + pathBytes + processBytes),
+            commandBytes);
+        if ((pathBytes && !entry->Path) ||
+            (processBytes && !entry->Process) ||
+            (commandBytes && !entry->CommandLine))
         {
-            RtlCopyMemory(entry->Path, rule->Data, pathBytes);
-        }
-        if (processBytes)
-        {
-            RtlCopyMemory(
-                entry->Process,
-                (PUCHAR)rule->Data + pathBytes,
-                processBytes);
-        }
-        if (commandBytes)
-        {
-            RtlCopyMemory(
-                entry->CommandLine,
-                (PUCHAR)rule->Data + pathBytes + processBytes,
-                commandBytes);
+            AglPolicyFreeSnapshot(snapshot);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         cursor += sizeof(AGL_POLICY_RULE) + pathBytes + processBytes + commandBytes;
         remaining -= sizeof(AGL_POLICY_RULE) + pathBytes + processBytes + commandBytes;
     }
 
-    snapshot->Count = header->RuleCount;
     snapshot->Mode = header->Mode;
     AglPolicySortRules(snapshot);
     AglRebuildEventIndex(snapshot);
@@ -716,27 +740,15 @@ NTSTATUS AglPolicyLoad(PVOID Policy, ULONG PolicyLength)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    oldSnapshot = AglPolicyPublishSnapshot(snapshot, &retiredEpoch);
-
-    if (oldSnapshot)
-    {
-        AglPolicyWaitForEpoch(retiredEpoch);
-        AglPolicyFreeSnapshot(oldSnapshot);
-    }
+    oldSnapshot = AglPolicyPublishSnapshot(snapshot);
+    AglPolicyReleaseSnapshot(oldSnapshot);
     return STATUS_SUCCESS;
 }
 
 void AglPolicyClear(void)
 {
-    AGL_POLICY_SNAPSHOT* oldSnapshot = NULL;
-    LONG retiredEpoch = 0;
-
-    oldSnapshot = AglPolicyPublishSnapshot(NULL, &retiredEpoch);
-    if (oldSnapshot)
-    {
-        AglPolicyWaitForEpoch(retiredEpoch);
-        AglPolicyFreeSnapshot(oldSnapshot);
-    }
+    AGL_POLICY_SNAPSHOT* oldSnapshot = AglPolicyPublishSnapshot(NULL);
+    AglPolicyReleaseSnapshot(oldSnapshot);
 }
 
 BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG AccessMask)
@@ -747,7 +759,6 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
     UNICODE_STRING processPath = { 0 };
     UNICODE_STRING commandLine = { 0 };
     ULONG rootProcessHash = 0;
-    LONG readerEpoch;
     ULONG candidates[AGL_MAX_POLICY_RULES];
     ULONG candidateCount;
     ULONG candidateIndex;
@@ -765,14 +776,10 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
         }
     }
 
-    readerEpoch = AglPolicyReaderEnter();
-    snapshot = (AGL_POLICY_SNAPSHOT*)InterlockedCompareExchangePointer(
-        (PVOID volatile*)&AglActivePolicy,
-        NULL,
-        NULL);
+    snapshot = AglPolicyAcquireSnapshot();
     if (!snapshot || snapshot->Mode != AGL_POLICY_MODE_CONTROL)
     {
-        AglPolicyReaderLeave(readerEpoch);
+        AglPolicyReleaseSnapshot(snapshot);
         if (rootCtx) AglContextReleaseProcess(rootCtx);
         if (processCtx) AglContextReleaseProcess(processCtx);
         return FALSE;
@@ -837,7 +844,7 @@ BOOLEAN AglPolicyShouldDenyEx(ULONG EventType, PCUNICODE_STRING Path, ULONG Acce
         break;
     }
 
-    AglPolicyReaderLeave(readerEpoch);
+    AglPolicyReleaseSnapshot(snapshot);
     if (rootCtx)
     {
         AglContextReleaseProcess(rootCtx);

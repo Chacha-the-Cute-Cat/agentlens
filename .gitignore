@@ -9,6 +9,7 @@ src/*/build/
 *.exe
 *.dll
 *.log
+*.sdf
 
 .vs/
 .codex-ppt/

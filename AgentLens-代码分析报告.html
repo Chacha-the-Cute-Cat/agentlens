@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentLens 代码分析报告</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --brand: #1d4ed8;
+    --brand-soft: #eff6ff;
+    --crit: #b91c1c;
+    --crit-bg: #fef2f2;
+    --high: #c2410c;
+    --high-bg: #fff7ed;
+    --med: #a16207;
+    --med-bg: #fefce8;
+    --low: #4b5563;
+    --low-bg: #f3f4f6;
+    --good: #15803d;
+    --good-bg: #f0fdf4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 60%, #1d4ed8 100%);
+    color: #fff;
+    padding: 44px 0 36px;
+  }
+  header.hero .wrap { padding-bottom: 0; }
+  header.hero h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: .5px; }
+  header.hero p { margin: 0; color: #cbd5e1; max-width: 780px; }
+  .meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .meta span {
+    background: rgba(255,255,255,.12);
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 13px;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    background: rgba(255,255,255,.96);
+    border-bottom: 1px solid var(--line);
+    z-index: 10;
+    backdrop-filter: blur(4px);
+  }
+  nav.toc .wrap { display: flex; flex-wrap: wrap; gap: 4px 18px; padding-top: 8px; padding-bottom: 8px; }
+  nav.toc a { color: var(--brand); text-decoration: none; font-size: 13.5px; }
+  nav.toc a:hover { text-decoration: underline; }
+  h2 {
+    font-size: 22px;
+    margin: 44px 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--line);
+  }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin: 14px 0;
+  }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 18px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi .num { font-size: 26px; font-weight: 700; color: var(--brand); }
+  .kpi .lbl { color: var(--muted); font-size: 13px; }
+  .bars { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+  .bar-row { display: grid; grid-template-columns: 170px 1fr 70px; align-items: center; gap: 10px; font-size: 13.5px; }
+  .bar-track { background: #eef1f5; border-radius: 6px; height: 18px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg,#2563eb,#60a5fa); }
+  .find { border: 1px solid var(--line); border-left: 5px solid var(--muted); border-radius: 10px; background: var(--card); padding: 14px 18px; margin: 12px 0; }
+  .find.crit { border-left-color: var(--crit); background: var(--crit-bg); }
+  .find.high { border-left-color: var(--high); background: var(--high-bg); }
+  .find.med  { border-left-color: var(--med);  background: var(--med-bg); }
+  .find.low  { border-left-color: var(--low);  background: var(--low-bg); }
+  .find .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .b-crit { background: var(--crit); } .b-high { background: var(--high); }
+  .b-med { background: var(--med); } .b-low { background: var(--low); }
+  .find .title { font-weight: 700; font-size: 15.5px; }
+  .find .loc { font-size: 13px; color: var(--muted); }
+  .find p { margin: 8px 0 4px; }
+  .find .row { display: flex; gap: 8px; margin-top: 6px; }
+  .find .row b { flex: 0 0 42px; color: var(--muted); font-weight: 600; }
+  code, .file {
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 13px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 0 5px;
+  }
+  .loc code { background: transparent; border: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: #fff; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f8fafc; font-weight: 600; }
+  td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit,minmax(230px,1fr)); gap: 12px; margin: 14px 0; }
+  .flow .box { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 12px 14px; }
+  .flow .box h4 { margin: 0 0 6px; font-size: 14.5px; color: var(--brand); }
+  .flow .box p { margin: 0; font-size: 13px; color: #374151; }
+  .good-item { border-left: 4px solid var(--good); background: var(--good-bg); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+  .note { background: var(--brand-soft); border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 14px; font-size: 13.5px; margin: 10px 0; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+  @media print { nav.toc { display: none; } body { background: #fff; } .find, .card { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>AgentLens 代码分析报告</h1>
+    <p>Windows 10/11 运行时安全项目（内核驱动 + 用户态服务）的静态代码审查。覆盖进程 / 线程 / 镜像 / 文件 / 注册表 / 对象句柄 / 网络活动观测、关联与控制。</p>
+    <div class="meta">
+      <span>分析日期：2026-10-20</span>
+      <span>仓库：D:\hf\L\agentlens</span>
+      <span>基线提交：28036d2（另有 5 个未提交的 vcxproj 修改，不影响结论）</span>
+      <span>方法：静态人工审查 + MSDN 契约核对</span>
+      <span>未修改任何代码</span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="wrap">
+    <a href="#summary">执行摘要</a>
+    <a href="#arch">架构概览</a>
+    <a href="#modules">模块清单</a>
+    <a href="#findings">问题发现</a>
+    <a href="#critical">严重问题</a>
+    <a href="#high">高优先级</a>
+    <a href="#medium">中优先级</a>
+    <a href="#low">低优先级</a>
+    <a href="#good">做得好的地方</a>
+    <a href="#build">构建与测试</a>
+    <a href="#roadmap">修复路线</a>
+    <a href="#appendix">附录</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+<h2 id="summary">执行摘要</h2>
+
+<div class="note"><b>修复状态（2026-10-20 更新）：</b>本报告列出的 S1–S5、H1–H8 与 M1–M10 均已修复并通过 Debug/x64 全量编译（/WX + /sdl；Spectre 库存在时自动启用，CI 强制启用）。事件消费改为由内核唯一维护读写索引的 IOCTL 通道；环形缓冲按完整记录收发、空间不足时正确计数丢弃；策略快照改为引用计数回收与按需字符串分配；进程上下文字符串改用非分页池。高优先级项已处理 ETW 反注册、注册表上下文随句柄关闭回收、解析边界校验与命名对象 DACL、网络 payload 对齐、移除文件采样、ETW manifest 对齐、策略语义校验与 DOS 路径归一化、安全编译基线及 CI/SDV/CodeQL 配置。中优先级项已处理退出事件关联、服务协作式停止、按句柄订阅、SecurityContext 防御、长度回绕、Agent JSON 转义、服务策略加载接线以及 INF/安装脚本统一。</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="num">8,266</div><div class="lbl">C/C++/头文件代码行（另含约 876 行脚本与配置）</div></div>
+  <div class="kpi"><div class="num">5,032</div><div class="lbl">内核驱动 AgentLensKernel.sys</div></div>
+  <div class="kpi"><div class="num">1,387</div><div class="lbl">服务 AgentLensService.exe</div></div>
+  <div class="kpi"><div class="num">23</div><div class="lbl">审查发现问题（5 严重 / 8 高 / 10 中）</div></div>
+</div>
+
+<p>整体判断：这是一个<strong>架构意识良好、模块边界清晰的安全产品原型</strong>。控制面输入验证、设备 DACL、PID+创建时间校验、写时复制策略快照、事件关联 ID 等设计都体现了成熟的 Windows 驱动开发思路。但作为安全产品，当前实现存在一批<strong>影响可用性与内核正确性</strong>的问题：事件通道在“服务共享环读取”这条主路径上存在崩溃级缺陷，内核侧还有两处并发 / IRQL 正确性问题。README 已声明“不得在生产环境加载未签名构建”，本报告的结论支持这一谨慎态度。</p>
+
+<div class="note"><b>一句话结论：</b>框架与思路值得肯定；事件通道（环形缓冲）、策略 epoch 回收、自旋锁内分页池三处必须修复后才能进入可信度更高的验证阶段。建议继续在隔离 VM 中开发，并补齐 CI / SDV / CodeQL。</div>
+
+<h2 id="arch">架构概览</h2>
+
+<p>项目为单驱动设计，五个二进制组件：</p>
+<div class="flow">
+  <div class="box"><h4>AgentLensKernel.sys</h4><p>合并控制设备、minifilter、WFP callout 与 6 类监控回调（进程 / 线程 / 镜像 / 注册表 / 对象句柄 / 网络），事件写入 1 MiB 共享环形缓冲并同步发 ETW。</p></div>
+  <div class="box"><h4>AgentLensService.exe</h4><p>系统服务。从共享环或 IOCTL 读取事件，输出 JSON Lines（含 DNS 名称关联），并运行 AgentLensAgent 的命名管道服务器。</p></div>
+  <div class="box"><h4>AgentLensAgent.dll</h4><p>注入目标进程。上报工作目录、环境变量计数、镜像 SHA-256、签名状态与调用栈摘要。</p></div>
+  <div class="box"><h4>AgentLensTools.exe</h4><p>控制 / 诊断 CLI：版本、统计、订阅、策略装载（文本策略编译器）、自测、fuzz、驱动启停。</p></div>
+  <div class="box"><h4>AgentLensEtw.exe</h4><p>独立实时 ETW 消费者，用于验证内核 ETW 输出与 DNS 关联。</p></div>
+</div>
+
+<p>数据流：内核回调 → <code>AglEventEmit</code> → （环形缓冲 → 共享内存 / IOCTL 读取）与（ETW 会话）→ 服务输出 JSON Lines。控制流：Tools / Service / Agent 通过 <code>\\\\.\\AgentLensControl</code> 的单 IOCTL 通道（表驱动分发，12 个操作码）执行订阅、读事件、装载策略、更新上下文等。</p>
+
+<h2 id="modules">模块清单与规模</h2>
+
+<table>
+  <tr><th>模块</th><th class="r">行数</th><th>职责与一句话评价</th></tr>
+  <tr><td>src\AgentLensKernel（15 个 .c + 10 个 .h）</td><td class="r">5,032</td><td>驱动主体。初始化 / 卸载顺序清晰；问题集中在事件环、策略 epoch 与上下文分配 IRQL。</td></tr>
+  <tr><td>src\AgentLensService（9 个 .cpp + 8 个 .h）</td><td class="r">1,387</td><td>JSON Lines 输出 + DNS ETW 关联 + 管道服务。共享环读取路径存在崩溃级缺陷。</td></tr>
+  <tr><td>src\AgentLensTools（main + policy_compiler）</td><td class="r">740</td><td>CLI 完整，文本策略编译器 + 结构化 fuzz 值得肯定。</td></tr>
+  <tr><td>src\AgentLensEtw</td><td class="r">504</td><td>独立 ETW 验证工具，DNS 映射逻辑清晰。</td></tr>
+  <tr><td>src\AgentLensAgent</td><td class="r">277</td><td>上下文上报 DLL；JSON 未转义、WinVerifyTrust 用法需留意。</td></tr>
+  <tr><td>include\AgentLensProtocol</td><td class="r">326</td><td>跨内核 / 用户态协议头，版本化、结构清晰。</td></tr>
+</table>
+
+<h3>行数占比</h3>
+<div class="bars">
+  <div class="bar-row"><span>AgentLensKernel</span><div class="bar-track"><div class="bar-fill" style="width:61%"></div></div><span>60.9%</span></div>
+  <div class="bar-row"><span>AgentLensService</span><div class="bar-track"><div class="bar-fill" style="width:17%"></div></div><span>16.8%</span></div>
+  <div class="bar-row"><span>AgentLensTools</span><div class="bar-track"><div class="bar-fill" style="width:9%"></div></div><span>9.0%</span></div>
+  <div class="bar-row"><span>AgentLensEtw</span><div class="bar-track"><div class="bar-fill" style="width:6%"></div></div><span>6.1%</span></div>
+  <div class="bar-row"><span>AgentLensProtocol</span><div class="bar-track"><div class="bar-fill" style="width:4%"></div></div><span>3.9%</span></div>
+  <div class="bar-row"><span>AgentLensAgent</span><div class="bar-track"><div class="bar-fill" style="width:4%"></div></div><span>3.4%</span></div>
+</div>
+
+<h2 id="findings">问题发现总览</h2>
+
+<table>
+  <tr><th>编号</th><th>级别</th><th>问题</th><th>位置</th></tr>
+  <tr><td>S1</td><td>严重</td><td>服务以只读映射写共享环 Tail，首批事件即访问违规</td><td>src\AgentLensService\event_reader.cpp:112,118,183</td></tr>
+  <tr><td>S2</td><td>严重</td><td>双 Tail 账本分裂：内核空闲空间永不回收，最终全量丢事件</td><td>event_reader.cpp:183 / agl_event_ring.c:194-204</td></tr>
+  <tr><td>S3</td><td>严重</td><td>环形缓冲溢出不保帧边界；IOCTL 读取切分记录无法恢复</td><td>agl_event_ring.c:204-226, 281-296</td></tr>
+  <tr><td>S4</td><td>严重</td><td>策略 epoch 回收存在 read-then-increment 竞态，潜在 UAF</td><td>agl_policy.c:117-126, 145-166</td></tr>
+  <tr><td>S5</td><td>严重</td><td>自旋锁内分配 / 释放分页池，IRQL 契约违规</td><td>agl_context.c:27-33, 82-101, 228-281</td></tr>
+  <tr><td>H1</td><td>高</td><td>卸载路径漏掉 ETW provider 反注册，每次重载泄漏</td><td>driver.c:124-188</td></tr>
+  <tr><td>H2</td><td>高</td><td>注册表 key 上下文只在删除 key 时清理，对象与内存无界累积</td><td>agl_registry_monitor.c:41-67, 419-426, 537-543</td></tr>
+  <tr><td>H3</td><td>高</td><td>服务解析信任未校验长度，可被损坏 / 伪造记录触发越界读</td><td>event_reader.cpp:264-329</td></tr>
+  <tr><td>H4</td><td>高</td><td>网络事件负载内嵌冗余零化头，协议不一致</td><td>agl_network_monitor.c:338, 443</td></tr>
+  <tr><td>H5</td><td>高</td><td>文件读 / 写事件 90% 静默采样丢弃，未文档化</td><td>agl_event.c:9-15, 59</td></tr>
+  <tr><td>H6</td><td>高</td><td>ETW manifest 事件号与实现不一致，无法按 manifest 解码</td><td>agl_etw.c:11-12 / etw\AgentLensProvider.man:13-26</td></tr>
+  <tr><td>H7</td><td>高</td><td>样例策略使用引擎不支持的通配符，规则永不命中</td><td>config\sample.policy:5-14 / agl_policy.c:545-560</td></tr>
+  <tr><td>H8</td><td>高</td><td>安全编译基线不足：Spectre 缓解关闭、无 /WX、无 SDL/CI/SDV</td><td>各 vcxproj</td></tr>
+  <tr><td>M1</td><td>中</td><td>进程退出先删上下文再发事件，exit 事件丢失关联信息</td><td>agl_process_monitor.c:197-210</td></tr>
+  <tr><td>M2</td><td>中</td><td>服务 STOP 处理只改状态，不停止工作线程与资源</td><td>service.cpp:48-60</td></tr>
+  <tr><td>M3</td><td>中</td><td>共享 section / 事件命名对象无显式安全描述符，依赖默认 DACL</td><td>agl_event_ring.c:20-22, 91-106</td></tr>
+  <tr><td>M4</td><td>中</td><td>订阅计数全局化，与句柄生命周期脱钩，计数可漂移</td><td>agl_event_ring.c / agl_control.c 订阅操作</td></tr>
+  <tr><td>M5</td><td>中</td><td>文件 pre-create 无条件解引用 SecurityContext，建议 NULL 防御</td><td>agl_file_monitor.c:156, 266</td></tr>
+  <tr><td>M6</td><td>中</td><td>cwd.MaximumLength 可能 USHORT 回绕（Length=65535 时）</td><td>agl_control.c:359</td></tr>
+  <tr><td>M7</td><td>中</td><td>策略快照内存放大：128 规则 × 3×1024 宽字符 ≈ 786 KiB 非分页 / 份，发布期双份</td><td>agl_policy.c:19-36</td></tr>
+  <tr><td>M8</td><td>中</td><td>Agent 上报 JSON 未转义路径 / 命令行，含反斜杠引号时 JSON 无效</td><td>dllmain.cpp:267-272</td></tr>
+  <tr><td>M9</td><td>中</td><td>服务侧 policy_loader.cpp / config.cpp 未接线（死代码）</td><td>src\AgentLensService</td></tr>
+  <tr><td>M10</td><td>中</td><td>INF 缺 SourceDisks* 段无法复制文件；install.cmd 与 INF 双套安装路径</td><td>config\AgentLensKernel.inf / installer\install.cmd</td></tr>
+</table>
+
+<h2 id="critical">严重问题（S1–S5）</h2>
+
+<div class="find crit">
+  <div class="head"><span class="badge b-crit">S1 严重</span><span class="title">服务以只读映射写共享环 Tail，第一批事件即访问违规</span></div>
+  <p class="loc"><code>src\AgentLensService\event_reader.cpp:112,118,183</code></p>
+  <p>OpenSharedRing 用 <code>OpenFileMappingW(FILE_MAP_READ)</code> 与 <code>MapViewOfFile(FILE_MAP_READ)</code> 映射节，但 ReadShared 读取到数据后执行 <code>m_header-&gt;Tail = …</code>。对只读视图写内存会触发 STATUS_ACCESS_VIOLATION。</p>
+  <div class="row"><b>影响</b><span>只要魔数校验通过（内核在运行时成立），ReadOnce 就永远优先走共享环路径；一旦有事件到达即崩溃，IOCTL 回退永远不会发生。服务主路径当前不可用。</span></div>
+  <div class="row"><b>建议</b><span>短修：以 FILE_MAP_READ|FILE_MAP_WRITE 映射。长修：与 S2/S3 一起重设计消费协议——由内核独占推进 Tail（消费者只读），或干脆让服务统一走 IOCTL 读取。</span></div>
+</div>
+
+<div class="find crit">
+  <div class="head"><span class="badge b-crit">S2 严重</span><span class="title">双 Tail 账本分裂：内核空闲空间永不回收，最终全量丢事件</span></div>
+  <p class="loc"><code>src\AgentLensService\event_reader.cpp:183</code> 与 <code>src\AgentLensKernel\agl_event_ring.c:194-204</code></p>
+  <p>内核写侧用内部变量 <code>AglEventRing.Tail</code> 计算 used/freeSpace；用户态只更新共享头的 Tail，内核内部 Tail 仅在 IOCTL 读取路径（agl_event_ring.c:296）前进。共享模式读得越多，内核看到的“已用空间”越大。</p>
+  <div class="row"><b>影响</b><span>环形缓冲被内核认为“写满”后，所有后续事件（含 CRITICAL 事件）全部被丢弃，CriticalDropped 持续增长；即使消费者已经把数据读空。这是事件通道的静默失效。</span></div>
+  <div class="row"><b>建议</b><span>单一事实源。推荐方案 A：消费者完全通过 IOCTL 读取（内核是唯一推进 Tail 的一方），共享映射仅用于只读统计快照；方案 B（内核信任用户写回的共享 Tail）不推荐，违反内核安全产品不该信任用户态的原则。</span></div>
+</div>
+
+<div class="find crit">
+  <div class="head"><span class="badge b-crit">S3 严重</span><span class="title">环形缓冲溢出不保帧边界；IOCTL 读取切分记录后无法恢复</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_event_ring.c:204-226（写侧）、281-296（读侧）</code></p>
+  <p>写侧只对“CRITICAL 且空间不足”做丢弃，非关键记录在空间不足时直接覆盖未读区域，Head 越过 Tail，被覆盖记录的前半部分变成垃圾 RecordLength。读侧按字节数切分（最多 BufferLength 字节），一条记录可能被拆到两次读取中，客户端 PrintJsonEvents 没有 carry-over 缓冲，遇到不完整记录即 break，剩余字节全部静默丢弃。</p>
+  <div class="row"><b>影响</b><span>流量高峰下记录流损坏：单条损坏即导致后续若干事件被解析器丢弃；溢出覆盖不增加 Dropped 计数，运维无法察觉。S1/S2 修复后此问题会立刻暴露。</span></div>
+  <div class="row"><b>建议</b><span>写侧：空间不足时按整帧跳过未读记录（推进到下一记录边界）并 Dropped++，可选写入恢复标记帧。读侧：只按完整记录推进 Tail，或客户端维护跨次读取的 carry-over 缓冲。同时给解析器加“重同步”逻辑。</span></div>
+</div>
+
+<div class="find crit">
+  <div class="head"><span class="badge b-crit">S4 严重</span><span class="title">策略 epoch 回收存在 read-then-increment 竞态，潜在 use-after-free</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_policy.c:117-126（读者进入）、145-166（发布与等待）</code></p>
+  <p>AglPolicyReaderEnter 先读当前 epoch，再对 readers[epoch] 自增，两步之间没有原子性：若写线程恰在窗口内发布新快照并完成对旧 epoch 的等待（读者尚未登记，计数为 0），随后读者登记的是旧 epoch、使用的却是下一个快照。连续两次热更新（A→B→C）时，第二次回收等待的是 readers[1]，而读者登记在 readers[0]，B 可能被提前释放，读者继续解引用 → UAF。</p>
+  <div class="row"><b>影响</b><span>内核模式 use-after-free，触发条件为策略热更新与监控回调并发，属于低频但高危的正确性问题；安全产品中不可接受。</span></div>
+  <div class="row"><b>建议</b><span>标准修正：读 epoch → 自增计数 → 内存屏障 → 重读 epoch，若变化则回退计数并重试；或在读取快照指针后再登记。写侧继续等待 retiredEpoch（现有 spinlock 已序列化发布）。</span></div>
+</div>
+
+<div class="find crit">
+  <div class="head"><span class="badge b-crit">S5 严重</span><span class="title">自旋锁内分配 / 释放分页池，IRQL 契约违规</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_context.c:228-281（分配）、27-33 与 82-101（释放）</code></p>
+  <p>AglContextGetOrCreateProcess 持 KSPIN_LOCK（IRQL 被提升到 DISPATCH_LEVEL）期间调用 AglCopyUnicodeString(PagedPool) 分配分页内存；AglContextDestroy 同样持锁释放 PagedPool 分配的 ImagePath/ImageName/CommandLine 缓冲。DISPATCH_LEVEL 下触碰分页池违反 IRQL 契约，一旦相关页面被换出即 IRQL_NOT_LESS_OR_EQUAL 蓝屏。进程创建回调本身虽在 PASSIVE，但代码先拿了自旋锁。</p>
+  <div class="row"><b>影响</b><span>进程创建 / 驱动卸载路径的潜在蓝屏；低内存压力下触发概率上升。</span></div>
+  <div class="row"><b>建议</b><span>路径字符串一律 NonPagedPool（当前上下文数据本身存于非分页结构，语义上也应如此）；或改“锁外分配、回锁校验、重复则释放”。Destroy 收集节点后在锁外统一释放。</span></div>
+</div>
+
+<h2 id="high">高优先级问题（H1–H8）</h2>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H1</span><span class="title">卸载路径漏掉 ETW provider 反注册</span></div>
+  <p class="loc"><code>src\AgentLensKernel\driver.c:124-188</code></p>
+  <p>DriverEntry 调用了 AglEtwInitialize（driver.c:37），失败回滚路径也调用了 AglEtwUninitialize（driver.c:118），但 AglDriverUnload 中完全没有反注册。每次卸载 / 重载泄漏一个 EtwRegister 的 provider 注册。</p>
+  <div class="row"><b>影响</b><span>tests\stress_reload.cmd 的 100 次重载循环会放大为 100 份泄漏；长期反复加载驱动（开发 / 调试常见）导致内核资源累积。</span></div>
+  <div class="row"><b>建议</b><span>在 AglDriverUnload 末尾补一行 AglEtwUninitialize()。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H2</span><span class="title">注册表 key 上下文只在删除 key 时清理</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_registry_monitor.c:41-67（入链并持引用）、419-426（post-open 加引用）、537-543（仅 PreDeleteKey 移除）</code></p>
+  <p>每次成功的 key 创建 / 打开都向全局链表插入一个持 ObReferenceObject 引用的上下文；移除只发生在 RegNtPreDeleteKey。未处理 RegNtPreKeyHandleClose / RegNtPostKeyHandleClose / RegNtCallbackObjectContextCleanup，被打开但从不删除的 key 永久驻留。</p>
+  <div class="row"><b>影响</b><span>非分页内存与 key 对象无界增长（进程枚举大量 key 即可放大）；持有引用还会延迟 key 对象销毁、可能阻碍 hive 卸载。这是一个可被恶意利用的资源耗尽面。</span></div>
+  <div class="row"><b>建议</b><span>用 handle-close / callback-context-cleanup 通知移除上下文。注意 MSDN《Invalid Key Object Pointers in Registry Notifications》：close 类通知中的 Object 指针状态无效，不能对之调用 ObReferenceObjectByPointer，应使用 CmRegisterCallbackEx 的 ObjectContext 机制或按值匹配。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H3</span><span class="title">服务端解析信任未校验长度，损坏 / 伪造记录可致越界读</span></div>
+  <p class="loc"><code>src\AgentLensService\event_reader.cpp:264-329</code></p>
+  <p>JSON 解析路径只校验 header-&gt;StructSize，没有校验 PayloadLength 不超过记录剩余字节，随后按 file-&gt;PathLength / reg-&gt;PathLength / domain-&gt;SniLength 读取 Data。这些长度字段来自环内数据；共享 section 是 PAGE_READWRITE 且未显式设置 DACL，若低权限进程可获得映射写访问，就能向 SYSTEM 权限的服务注入伪造记录。</p>
+  <div class="row"><b>影响</b><span>越界读取（视图范围内，可能泄出相邻记录内容并随 JSON 输出）或服务崩溃；最坏情形构成对特权服务的攻击面。</span></div>
+  <div class="row"><b>建议</b><span>解析前完整校验：PayloadLength ≤ RecordLength - 环头 - 事件头；各固定字段长度与 Data 长度之和 ≤ PayloadLength。给 section / 事件命名对象显式 DACL（SYSTEM + Administrators，必要时服务 SID），消费者只映射读。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H4</span><span class="title">网络事件负载内嵌冗余零化事件头</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_network_monitor.c:338-347、443-459</code></p>
+  <p>AglNetworkClassify 与 AglNetworkFlowDelete 调用 AglEventEmit 时把整个 AGL_NETWORK_EVENT（含一个零化的 AGL_EVENT_HEADER）作为 payload；而 token 事件（agl_event.c:235-243）明确跳过头部只传字段。两个消费端（event_reader.cpp:342-346 与 AgentLensEtw main.cpp）都必须“偏移一个头”补偿，这是靠巧合对齐的隐式协议。</p>
+  <div class="row"><b>影响</b><span>负载布局不一致、易错；未来统一 payload 规则或重构事件发射会静默破坏网络事件的解析。</span></div>
+  <div class="row"><b>建议</b><span>统一为“payload 不含头”，网络事件传 &amp;event + sizeof(AGL_EVENT_HEADER) 之后的字段，与 token 事件一致；同步修正消费端。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H5</span><span class="title">文件读 / 写事件 90% 静默采样丢弃</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_event.c:9-15、59</code></p>
+  <p>AglShouldSampleEvent 对 FILE_READ / FILE_WRITE 每 10 个只保留 1 个，丢弃行为在 README 中没有任何说明，也没有在统计里体现采样数。</p>
+  <div class="row"><b>影响</b><span>文件活动是 EDR 类产品的核心取证数据，静默采样会造成可被利用的观察缺口，且使用者无感知。</span></div>
+  <div class="row"><b>建议</b><span>至少文档化；更优：采样率可配置（策略 / IOCTL），并在 AGL_STATS 中暴露采样丢弃计数。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H6</span><span class="title">ETW manifest 与实现不一致</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_etw.c:11-12</code> / <code>etw\AgentLensProvider.man:13-26</code></p>
+  <p>驱动写的是 EVENT_DESCRIPTOR id 1000，manifest 却只声明了 1001–1005；且 manifest 事件没有 template（无 payload 定义）、缺 task / opcode、channel 默认 enabled=false。wevtutil 导入后按 manifest 无法解码驱动实际发出的事件。</p>
+  <div class="row"><b>影响</b><span>ETW 侧只有原始字节可读（AgentLensEtw 自己按结构解析），第三方日志 / SIEM 集成无从下手。</span></div>
+  <div class="row"><b>建议</b><span>对齐事件号，补齐 template 与用户数据布局；若产品定位就是原始事件流，则删除误导性 manifest 或在文档中明确。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H7</span><span class="title">样例策略使用引擎不支持的通配符</span></div>
+  <p class="loc"><code>config\sample.policy:5-14</code> / <code>src\AgentLensKernel\agl_policy.c:545-560</code></p>
+  <p>样例写 <code>path = C:\Users\*\Desktop\*</code>，但 AglMatchString 只做大小写不敏感的前缀匹配（RtlPrefixUnicodeString），<code>*</code> 被当作普通字符；<code>process = agent.exe</code> 与完整镜像路径做前缀匹配也永远不会命中。这意味着样例策略实际上一条都不会触发 deny。</p>
+  <div class="row"><b>影响</b><span>用户照着样例配置得到“策略不生效”的结果，安全产品的策略语义误导风险高。</span></div>
+  <div class="row"><b>建议</b><span>二选一：实现通配符 / glob 匹配（注意内核实现要受控）；或明确文档化“前缀匹配”语义并修正样例（写完整路径前缀）。文本策略编译器应对不支持的语法给出告警。</span></div>
+</div>
+
+<div class="find high">
+  <div class="head"><span class="badge b-high">H8</span><span class="title">安全编译基线不足</span></div>
+  <p class="loc"><code>各 vcxproj；内核项目 SpectreMitigation=false 共 5 处（AgentLensKernel.vcxproj:19,26,32,39,45）</code></p>
+  <p>全部项目：Spectre 缓解关闭；TreatWarningAsError=false；未启用 /sdl（SDL 检查）；无 CI、无 SDV、无 CodeQL（README 已自行承认）。</p>
+  <div class="row"><b>影响</b><span>针对内核的侧信道 / 整型溢出类编译器级缓解缺失；警告无法拦截回归。</span></div>
+  <div class="row"><b>建议</b><span>内核开启 /Qspectre、/WX、/sdl；用户态组件同样建议开启；接入 CI + SDV + CodeQL（微软有公开的驱动 CI 模板）。</span></div>
+</div>
+
+<h2 id="medium">中优先级问题（M1–M10）</h2>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M1</span><span class="title">进程退出事件丢失关联信息</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_process_monitor.c:197-210</code></p>
+  <p>退出分支先调用 AglContextRemoveProcess 再发 PROCESS_EXIT 事件，此时 CorrelationId / AgentSessionId 已查不到，事件头里的关联字段退化为序列号。</p>
+  <div class="row"><b>建议</b><span>先取上下文快照（关联 ID、会话 ID）再移除，或由 RemoveProcess 返回快照。</span></div>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M2</span><span class="title">服务 STOP 处理不完整</span></div>
+  <p class="loc"><code>src\AgentLensService\service.cpp:48-60</code></p>
+  <p>收到 SERVICE_CONTROL_STOP/SHUTDOWN 仅把状态置为 STOPPED，不设置退出信号、不停止读取线程 / DNS 会话 / 管道服务器，依赖 SCM 强杀进程。</p>
+  <div class="row"><b>建议</b><span>使用事件对象协调各线程退出、反订阅、停 ETW 会话后再置 STOPPED。</span></div>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M3</span><span class="title">共享 section / 事件命名对象无显式安全描述符</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_event_ring.c:20-22、91-106</code></p>
+  <p>InitializeObjectAttributes 传入 NULL 安全描述符，对象安全取决于默认 DACL。共享节允许写（PAGE_READWRITE），一旦非管理员可获写访问，H3 的可利用性大幅上升。</p>
+  <div class="row"><b>建议</b><span>显式 SDDL（SYSTEM+BA），消费者只读；在测试 VM 上用低权限账户验证 open 失败。</span></div>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M4</span><span class="title">订阅计数与句柄生命周期脱钩</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_event_ring.c</code>（ActiveSubscribers 全局计数）</p>
+  <p>订阅是全局计数而非 per-handle 状态：客户端未 unsubscribe 就关句柄时计数不回落；多客户端时无法按订阅者路由。</p>
+  <div class="row"><b>建议</b><span>改为文件对象（FsContext）维度跟踪订阅状态，清理回调时自动退订。</span></div>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M5</span><span class="title">pre-create 直接解引用 SecurityContext</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_file_monitor.c:156、266</code></p>
+  <p>Parameters.Create.SecurityContext 在少数重解析 / 特殊来源的 create 中可能为 NULL，无条件解引用是潜在空指针。增加防御性检查成本极低。</p>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M6</span><span class="title">cwd.MaximumLength 可能回绕</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_control.c:359</code></p>
+  <p>CurrentDirectoryLength=65535 时 MaximumLength=Length+2 回绕为 1；后续字符串操作依赖错误的 MaximumLength。输入虽限 2048 字节，但该上限应同时用于 MaximumLength 计算。</p>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M7</span><span class="title">策略快照内存放大</span></div>
+  <p class="loc"><code>src\AgentLensKernel\agl_policy.c:19-36</code></p>
+  <p>每条规则内联 3×1024 宽字符缓冲（≈6 KiB），128 条规则约 786 KiB 非分页内存 / 快照，发布切换期间双份。可接受但应评估上限与改用指针式存储。</p>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M8</span><span class="title">Agent 上报 JSON 未转义</span></div>
+  <p class="loc"><code>src\AgentLensAgent\dllmain.cpp:267-272</code></p>
+  <p>image / command / cwd 直接拼进 JSON，路径含反斜杠或引号时 JSON 无效（Windows 路径必含反斜杠）。服务端仅原样打印，暂不影响流程但格式已不合法。</p>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M9</span><span class="title">服务侧死代码</span></div>
+  <p class="loc"><code>src\AgentLensService\policy_loader.cpp、config.cpp</code></p>
+  <p>LoadPolicyFile 与 LoadConfig 未被任何调用点使用，属于未接线脚手架。</p>
+</div>
+
+<div class="find med">
+  <div class="head"><span class="badge b-med">M10</span><span class="title">安装路径双轨且 INF 不完整</span></div>
+  <p class="loc"><code>config\AgentLensKernel.inf</code> / <code>installer\install.cmd</code></p>
+  <p>INF 的 DefaultInstall 使用 CopyFiles 但缺少 SourceDisksNames / SourceDisksFiles 段，标准安装方式无法定位源文件；实际安装走 install.cmd 手工 sc create，两套路径易漂移。DriverVer 日期 07/01/2026 已过期。</p>
+</div>
+
+<h2 id="low">低优先级问题</h2>
+
+<div class="find low">
+  <div class="head"><span class="badge b-low">L1</span><span class="title">零散小问题清单</span></div>
+  <p>
+    · driver.c:32 保存 AglRegistryPath 后从未使用；<br>
+    · agl_registry_monitor.c 重复 #include "agl_policy.h"；<br>
+    · agl_trace.c 的 Info 日志使用 DPFLTR_ERROR_LEVEL，建议用 INFO 级别；<br>
+    · event_reader.cpp:149-158 共享环逐字节拷贝且 64 位 Head/Tail 非原子读取，可能撕裂（随 S1–S3 一并解决）；<br>
+    · dllmain.cpp 中 WinVerifyTrust 使用 WTD_REVOKE_WHOLECHAIN 且失败即 UNSIGNED/UNKNOWN，离线环境撤销检查失败会把已签名镜像标成 UNKNOWN（语义需文档化）；<br>
+    · agent_server.cpp 单次 ReadFile 64 KiB 消息缓冲，长消息依赖调用方单包；<br>
+    · 注册表值哈希仅取前 4096 字节（有意的轻量设计，建议文档化）。
+  </p>
+</div>
+
+<h2 id="good">做得好的地方</h2>
+
+<div class="good-item"><b>架构与分层。</b>协议头（include\AgentLensProtocol）与内核 / 用户态实现边界清晰；DriverEntry 与 Unload 的初始化 / 回滚严格成对（仅缺 ETW 反注册），失败路径回滚顺序正确。</div>
+<div class="good-item"><b>控制面健壮。</b>单 IOCTL 表驱动分发；StructSize / Version / OpCode / 长度逐项校验；RequestorMode 必须为 UserMode；设备 DACL 限定 SYSTEM + Administrators。</div>
+<div class="good-item"><b>上下文管理。</b>引用计数 + tombstone 延迟回收 + PID 与创建时间双重校验，规避 PID 复用误匹配，是成熟的内核上下文做法。</div>
+<div class="good-item"><b>策略引擎设计。</b>写时复制快照、事件类型索引、优先级排序、大小写不敏感前缀树、epoch 延迟回收——设计先进；实现上的 S4 竞态需要修复，但方向正确。</div>
+<div class="good-item"><b>事件模型。</b>版本化 schema、全局序列号、关联 ID、Agent 会话 / 对话 / 工具调用标记、CRITICAL 标志，支撑跨组件关联分析。</div>
+<div class="good-item"><b>网络观测。</b>WFP ALE 全层覆盖（connect / recv / flow / close / stream）、流层字节与包统计、尽力 TLS SNI 提取、DNS Client ETW 关联——功能完整性在同类原型中相当好。</div>
+<div class="good-item"><b>工程配套。</b>自带 selftest、结构化 IOCTL / 策略 fuzz、Driver Verifier、压力重载脚本与结果模板，验证意识好。</div>
+
+<h2 id="build">构建与测试现状</h2>
+
+<div class="card">
+  <p><b>构建：</b>要求 VS2022 + WDK + Windows SDK，x64 单平台。本报告为静态审查，未在本机执行编译（结论不依赖编译产物）。<b>配置观察：</b>全项目 /W4、BufferSecurityCheck 开启；Spectre 缓解、/WX、SDL、CI 缺失（H8）。</p>
+  <p><b>测试：</b>tests\ 提供 reload / selftest / 100 次压力重载 / 10,000 次 IOCTL fuzz / 策略 fuzz / Driver Verifier 脚本。但目前是“脚本 + 人工判读”，无 CI、无断言化回归、fuzz 只统计 rejected 计数不校验不变量。</p>
+  <p><b>建议：</b>把 S1–S3 修复后，在 VM 中优先验证“事件环溢出行为”（tests\README 已将其列为预期检查项，恰好覆盖本报告 S3）；再补 SDV / CodeQL 与自动化 CI。</p>
+</div>
+
+<h2 id="roadmap">建议修复路线</h2>
+
+<div class="card">
+  <p><b>P0 — 事件通道（可用性）：</b>S1（只读映射写 Tail 崩溃）→ S2（单账本 / 统一 IOCTL 消费）→ S3（保帧边界 + carry-over）。三者互相牵连，应作为一个工作项整体重设计消费协议。</p>
+  <p><b>P0 — 内核正确性：</b>S5（锁内分页池）与 S4（epoch 竞态）先行，H1（ETW 反注册）顺手补上。</p>
+  <p><b>P1 — 安全与一致性：</b>H2（注册表上下文生命周期）、H3（解析校验 + 节 DACL）、H4（统一 payload 布局）、H6（ETW manifest 对齐）、H7（策略语法与样例）、H8（编译基线 + CI）。</p>
+  <p><b>P2 — 打磨：</b>M1–M10 与 L 级清单，随迭代清理。</p>
+</div>
+
+<h2 id="appendix">附录：方法与局限</h2>
+
+<div class="card">
+  <p><b>方法：</b>逐文件通读全部 8,266 行 C/C++/头文件与关键脚本、manifest、INF；关键 API 契约对照 MSDN（注册表回调、WFP 动态会话、minifilter 回调 IRQL 等）；对并发逻辑做了手工时序推演。</p>
+  <p><b>局限：</b>未编译、未运行、未做 SDV / CodeQL / Driver Verifier 实测；M3 的 DACL 实际行为、S1 崩溃复现、manifest 编译结果等建议在测试 VM 上验证。报告基于 2026-10-20 工作区快照（提交 28036d2 + 5 个未提交 vcxproj 修改，均不影响结论）。</p>
+  <p><b>免责：</b>本报告为静态审查意见，供开发与评审参考，不构成对系统安全性的认证。</p>
+</div>
+
+<footer>AgentLens 代码分析报告 · 生成于 2026-10-20（Asia/Shanghai）· 静态审查，未修改仓库代码</footer>
+
+</div>
+</body>
+</html>

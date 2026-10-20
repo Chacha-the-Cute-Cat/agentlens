@@ -7,12 +7,20 @@
 
 namespace
 {
+    HANDLE g_agentThread = nullptr;
+    volatile LONG g_agentStop = 0;
+
     DWORD WINAPI AgentServerThread(LPVOID)
     {
         const wchar_t* pipeName = L"\\\\.\\pipe\\AgentLensAgent";
 
         for (;;)
         {
+            if (g_agentStop != 0)
+            {
+                break;
+            }
+
             HANDLE pipe = CreateNamedPipeW(
                 pipeName,
                 PIPE_ACCESS_DUPLEX,
@@ -32,6 +40,10 @@ namespace
             if (!ConnectNamedPipe(pipe, nullptr))
             {
                 CloseHandle(pipe);
+                if (g_agentStop != 0)
+                {
+                    break;
+                }
                 Sleep(500);
                 continue;
             }
@@ -47,16 +59,31 @@ namespace
             DisconnectNamedPipe(pipe);
             CloseHandle(pipe);
         }
+        return 0;
     }
 }
 
 bool StartAgentServer()
 {
-    HANDLE thread = CreateThread(nullptr, 0, AgentServerThread, nullptr, 0, nullptr);
-    if (thread)
+    if (g_agentThread)
     {
-        CloseHandle(thread);
         return true;
     }
-    return false;
+
+    InterlockedExchange(&g_agentStop, 0);
+    g_agentThread = CreateThread(nullptr, 0, AgentServerThread, nullptr, 0, nullptr);
+    return g_agentThread != nullptr;
+}
+
+void StopAgentServer()
+{
+    InterlockedExchange(&g_agentStop, 1);
+
+    if (g_agentThread)
+    {
+        CancelSynchronousIo(g_agentThread);
+        WaitForSingleObject(g_agentThread, 3000);
+        CloseHandle(g_agentThread);
+        g_agentThread = nullptr;
+    }
 }

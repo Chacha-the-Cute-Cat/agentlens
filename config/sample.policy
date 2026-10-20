@@ -1,14 +1,20 @@
 # AgentLens sample policy
+#
+# Matching semantics: path / process / command filters are case-insensitive
+# prefix matches. Wildcards are not supported and are rejected by the policy
+# compiler. DOS drive-letter paths are converted to native device paths when
+# the text policy is compiled on the target machine. Use the full image path
+# prefix for process filters.
 
 mode = control
 
 deny file.write
-    process = agent.exe
-    path = C:\Users\*\Desktop\*
+    process = C:\Program Files\AgentLens\agent.exe
+    path = C:\Users\Public\Desktop\
 
 deny registry.set
-    process = agent.exe
+    process = C:\Program Files\AgentLens\agent.exe
     path = \REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
 
 deny network.connect
-    process = agent.exe
+    process = C:\Program Files\AgentLens\agent.exe

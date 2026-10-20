@@ -5,3 +5,4 @@
 int RunService();
 int RunConsole();
 void SetEventOptions(FILE* output, unsigned long long filterPid, unsigned long filterType);
+void SetPolicyPath(const wchar_t* path);

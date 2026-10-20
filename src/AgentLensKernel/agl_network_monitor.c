@@ -404,8 +404,8 @@ static void AglNetworkClassify(
             0,
             0,
             0,
-            &event,
-            sizeof(event));
+            (PUCHAR)&event + sizeof(AGL_EVENT_HEADER),
+            sizeof(event) - sizeof(AGL_EVENT_HEADER));
 
         if (flowContext)
         {
@@ -458,8 +458,8 @@ static NTSTATUS AglNetworkFlowDelete(
             0,
             0,
             0,
-            &event,
-            sizeof(event));
+            (PUCHAR)&event + sizeof(AGL_EVENT_HEADER),
+            sizeof(event) - sizeof(AGL_EVENT_HEADER));
     }
 
     AglContextRemoveFlow(flowContext);

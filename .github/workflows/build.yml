@@ -1,0 +1,26 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Verify WDK
+        shell: pwsh
+        run: |
+          $props = "${env:ProgramFiles(x86)}\Windows Kits\10\build\WindowsDriver.Common.props"
+          if (-not (Test-Path $props)) {
+            throw "Windows Driver Kit is required on the runner."
+          }
+
+      - name: Build Release x64
+        shell: pwsh
+        run: msbuild AgentLens.sln /t:Build /p:Configuration=Release /p:Platform=x64 /p:AgentLensSpectreMitigation=true /m /v:minimal

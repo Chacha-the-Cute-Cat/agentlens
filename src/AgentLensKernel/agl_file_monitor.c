@@ -153,7 +153,10 @@ static void AglEmitFileEvent(
 
     if (EventType == AGL_EVENT_FILE_OPEN)
     {
-        event->DesiredAccess = iopb->Parameters.Create.SecurityContext->DesiredAccess;
+        event->DesiredAccess =
+            iopb->Parameters.Create.SecurityContext
+                ? iopb->Parameters.Create.SecurityContext->DesiredAccess
+                : 0;
         event->CreateOptions = iopb->Parameters.Create.Options;
         event->CreateDisposition = (iopb->Parameters.Create.Options >> 24) & 0xFF;
     }
@@ -263,7 +266,10 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreCreate(
         {
             fileCtx = (AGL_FILE_CONTEXT*)context;
             fileCtx->ProcessId = (ULONG64)(ULONG_PTR)PsGetCurrentProcessId();
-            fileCtx->DesiredAccess = Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess;
+            fileCtx->DesiredAccess =
+                Data->Iopb->Parameters.Create.SecurityContext
+                    ? Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess
+                    : 0;
             fileCtx->CreateOptions = Data->Iopb->Parameters.Create.Options;
             FltSetStreamHandleContext(
                 FltObjects->Instance,

@@ -194,17 +194,26 @@ static void AglProcessNotify(
     }
     else
     {
-        AglContextRemoveProcess((ULONG64)(ULONG_PTR)ProcessId);
+        AGL_PROCESS_CTX* ctx = AglContextAcquireProcess(
+            (ULONG64)(ULONG_PTR)ProcessId);
+        ULONG64 parentPid = ctx ? ctx->ParentProcessId : 0;
+
         AglEventEmit(
             AGL_EVENT_PROCESS_EXIT,
             STATUS_SUCCESS,
             (ULONG64)(ULONG_PTR)ProcessId,
             (ULONG64)(ULONG_PTR)PsGetCurrentThreadId(),
-            0,
+            parentPid,
             0,
             0,
             NULL,
             0);
+
+        if (ctx)
+        {
+            AglContextReleaseProcess(ctx);
+        }
+        AglContextRemoveProcess((ULONG64)(ULONG_PTR)ProcessId);
     }
 }
 

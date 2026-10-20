@@ -6,6 +6,11 @@
 install.cmd Debug
 ```
 
+`install.cmd` stages the driver and `config\AgentLensKernel.inf` into
+`build\install` and installs the kernel service through the INF, so the INF is
+the single definition of the driver service. Generate and sign the catalog
+first when the test environment requires it.
+
 ## Uninstall
 
 ```cmd
@@ -25,7 +30,7 @@ sign_all.cmd Debug
 ## Generate and Sign Catalog
 
 ```cmd
-generate_catalog.cmd
+generate_catalog.cmd Debug
 sign_catalog.cmd
 ```
 

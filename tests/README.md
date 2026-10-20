@@ -56,6 +56,17 @@ Then reboot and run:
 run_post_reboot_tests.cmd
 ```
 
+## Static Analysis
+
+Run SDV from a WDK-enabled Visual Studio Developer Command Prompt:
+
+```cmd
+run_sdv.cmd
+```
+
+CI builds and CodeQL analysis are defined in `.github/workflows/build.yml`
+and `.github/workflows/codeql.yml`.
+
 Expected checks:
 
 - driver load/unload without leak

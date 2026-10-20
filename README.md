@@ -19,7 +19,7 @@ The repository contains a compilable, loadable, observable, and partially contro
 ### Kernel
 
 - Control device `\Device\AgentLensControl`
-- Non-paged event ring and shared-memory event mapping
+- Non-paged event ring with a kernel-owned consumer index and IOCTL event consumption
 - Named event notification
 - Process monitoring with `PsSetCreateProcessNotifyRoutineEx`
 - Thread monitoring with `PsSetCreateThreadNotifyRoutine`
@@ -46,6 +46,8 @@ Observed event categories include:
 - Network connect, flow established, and flow closed
 
 The event ring uses versioned records and JSON Lines output with correlation IDs.
+File read and write events are emitted without sampling; ring overflow is
+reported through the `Dropped` and `CriticalDropped` statistics.
 
 ### Context
 
@@ -110,6 +112,7 @@ Requirements:
 - Visual Studio 2022
 - Windows SDK
 - Windows Driver Kit (WDK)
+- MSVC Spectre-mitigated libraries (Visual Studio Installer, individual components)
 
 Build the complete solution:
 
@@ -129,6 +132,18 @@ Release build:
 msbuild AgentLens.sln /t:Build /p:Configuration=Release /p:Platform=x64 /m
 ```
 
+The projects enable `/WX` and `/sdl` by default and automatically enable
+Spectre mitigation when the toolset provides the Spectre-mitigated libraries.
+CI forces the mitigation on. To require or disable it explicitly:
+
+```cmd
+msbuild AgentLens.sln /t:Build /p:Configuration=Debug /p:Platform=x64 /p:AgentLensSpectreMitigation=true /m
+msbuild AgentLens.sln /t:Build /p:Configuration=Debug /p:Platform=x64 /p:AgentLensSpectreMitigation=false /m
+```
+
+CI (`.github/workflows/build.yml`), CodeQL (`.github/workflows/codeql.yml`),
+and the SDV entry point (`tests\run_sdv.cmd`) cover the static-analysis gates.
+
 ## Run
 
 The kernel driver must be loaded in a test environment with test signing enabled.
@@ -137,7 +152,12 @@ Run the service as administrator:
 
 ```cmd
 AgentLensService.exe --console
+AgentLensService.exe --console --policy <binary-policy-file>
 ```
+
+Without `--policy`, the service tries to load `AgentLens.policy` from its
+working directory; a missing default file is ignored, while an explicitly
+specified policy that cannot be read fails startup.
 
 Use the control CLI to inspect state:
 
@@ -153,6 +173,15 @@ AgentLensTools.exe --policy <binary-policy-file>
 AgentLensTools.exe --text-policy <text-policy-file>
 AgentLensTools.exe --clear-policy
 ```
+
+## Policy Matching
+
+Text policy `path`, `process`, and `command` attributes use case-insensitive
+prefix matching. Wildcards (`*`, `?`) are not supported and are rejected by the
+compiler. For `process`, specify the full image path prefix, for example
+`C:\Program Files\AgentLens\agent.exe`. DOS drive-letter paths in text policies
+are normalized to native `\Device\HarddiskVolumeN\...` paths at compile time,
+so the text policy should be compiled on the system where it will be loaded.
 
 ## Install, Sign, and Test
 

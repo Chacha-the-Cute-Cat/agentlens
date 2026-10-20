@@ -13,6 +13,10 @@
 static PDEVICE_OBJECT AglControlDevice = NULL;
 static UNICODE_STRING AglSymbolicLink = { 0 };
 
+typedef struct _AGL_CONTROL_CLIENT {
+    BOOLEAN Subscribed;
+} AGL_CONTROL_CLIENT;
+
 typedef NTSTATUS (*AGL_CONTROL_HANDLER)(
     PVOID SystemBuffer,
     ULONG InputLength,
@@ -30,7 +34,27 @@ typedef struct _AGL_CONTROL_OPERATION {
 static NTSTATUS AglHandleDeviceControl(
     PIRP Irp,
     PIO_STACK_LOCATION IrpSp,
+    AGL_CONTROL_CLIENT* Client,
     PULONG_PTR Information);
+
+static void AglControlReleaseClient(PFILE_OBJECT FileObject)
+{
+    AGL_CONTROL_CLIENT* client;
+
+    if (!FileObject || !FileObject->FsContext)
+    {
+        return;
+    }
+
+    client = (AGL_CONTROL_CLIENT*)FileObject->FsContext;
+    if (client->Subscribed)
+    {
+        AglEventRingUnsubscribe();
+        client->Subscribed = FALSE;
+    }
+    AglFree(client);
+    FileObject->FsContext = NULL;
+}
 
 PDEVICE_OBJECT AglControlGetDevice(void)
 {
@@ -113,13 +137,39 @@ NTSTATUS AglControlDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     switch (irpSp->MajorFunction)
     {
     case IRP_MJ_CREATE:
+        if (irpSp->FileObject)
+        {
+            AGL_CONTROL_CLIENT* client =
+                (AGL_CONTROL_CLIENT*)AglAllocNonPaged(sizeof(*client));
+            if (!client)
+            {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            RtlZeroMemory(client, sizeof(*client));
+            irpSp->FileObject->FsContext = client;
+        }
+        status = STATUS_SUCCESS;
+        break;
+
     case IRP_MJ_CLEANUP:
+        AglControlReleaseClient(irpSp->FileObject);
+        status = STATUS_SUCCESS;
+        break;
+
     case IRP_MJ_CLOSE:
+        AglControlReleaseClient(irpSp->FileObject);
         status = STATUS_SUCCESS;
         break;
 
     case IRP_MJ_DEVICE_CONTROL:
-        status = AglHandleDeviceControl(Irp, irpSp, &info);
+        status = AglHandleDeviceControl(
+            Irp,
+            irpSp,
+            irpSp->FileObject
+                ? (AGL_CONTROL_CLIENT*)irpSp->FileObject->FsContext
+                : NULL,
+            &info);
         break;
     }
 
@@ -150,38 +200,6 @@ static NTSTATUS AglControlGetVersion(
     info.KernelBuild = 0;
     RtlCopyMemory(SystemBuffer, &info, sizeof(info));
     *Information = sizeof(info);
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS AglControlSubscribe(
-    PVOID SystemBuffer,
-    ULONG InputLength,
-    ULONG OutputLength,
-    AGL_CONTROL_HEADER* Header,
-    PULONG_PTR Information)
-{
-    UNREFERENCED_PARAMETER(SystemBuffer);
-    UNREFERENCED_PARAMETER(InputLength);
-    UNREFERENCED_PARAMETER(OutputLength);
-    UNREFERENCED_PARAMETER(Header);
-    UNREFERENCED_PARAMETER(Information);
-    AglEventRingSubscribe();
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS AglControlUnsubscribe(
-    PVOID SystemBuffer,
-    ULONG InputLength,
-    ULONG OutputLength,
-    AGL_CONTROL_HEADER* Header,
-    PULONG_PTR Information)
-{
-    UNREFERENCED_PARAMETER(SystemBuffer);
-    UNREFERENCED_PARAMETER(InputLength);
-    UNREFERENCED_PARAMETER(OutputLength);
-    UNREFERENCED_PARAMETER(Header);
-    UNREFERENCED_PARAMETER(Information);
-    AglEventRingUnsubscribe();
     return STATUS_SUCCESS;
 }
 
@@ -356,7 +374,14 @@ static NTSTATUS AglControlUpdateContext(
 
     cwd.Buffer = update->Data;
     cwd.Length = (USHORT)update->CurrentDirectoryLength;
-    cwd.MaximumLength = cwd.Length + sizeof(WCHAR);
+    {
+        ULONG maximumLength = (ULONG)cwd.Length + sizeof(WCHAR);
+        if (maximumLength > MAXUSHORT)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        cwd.MaximumLength = (USHORT)maximumLength;
+    }
     AglContextUpdateProcess(update->ProcessId, update->EnvironmentHash, &cwd);
     return STATUS_SUCCESS;
 }
@@ -436,8 +461,6 @@ static NTSTATUS AglControlUpdateAgentTag(
 
 static const AGL_CONTROL_OPERATION AglControlOperations[] = {
     { AGL_OP_GET_VERSION, 0, sizeof(AGL_VERSION_INFO), AglControlGetVersion },
-    { AGL_OP_SUBSCRIBE_EVENTS, 0, 0, AglControlSubscribe },
-    { AGL_OP_UNSUBSCRIBE_EVENTS, 0, 0, AglControlUnsubscribe },
     { AGL_OP_READ_EVENTS, 0, 0, AglControlReadEvents },
     { AGL_OP_GET_STATS, 0, sizeof(AGL_STATS), AglControlGetStats },
     { AGL_OP_QUERY_PROCESS, sizeof(AGL_PROCESS_QUERY), sizeof(AGL_PROCESS_QUERY), AglControlQueryProcess },
@@ -452,6 +475,7 @@ static const AGL_CONTROL_OPERATION AglControlOperations[] = {
 static NTSTATUS AglHandleDeviceControl(
     PIRP Irp,
     PIO_STACK_LOCATION IrpSp,
+    AGL_CONTROL_CLIENT* Client,
     PULONG_PTR Information)
 {
     PVOID systemBuffer = Irp->AssociatedIrp.SystemBuffer;
@@ -485,6 +509,30 @@ static NTSTATUS AglHandleDeviceControl(
     if (header->OpCode >= AGL_OP_MAX)
     {
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (header->OpCode == AGL_OP_SUBSCRIBE_EVENTS)
+    {
+        if (!Client)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (!Client->Subscribed)
+        {
+            AglEventRingSubscribe();
+            Client->Subscribed = TRUE;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (header->OpCode == AGL_OP_UNSUBSCRIBE_EVENTS)
+    {
+        if (Client && Client->Subscribed)
+        {
+            AglEventRingUnsubscribe();
+            Client->Subscribed = FALSE;
+        }
+        return STATUS_SUCCESS;
     }
 
     for (ULONG i = 0; i < ARRAYSIZE(AglControlOperations); i++)

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <instrumentationManifest
-    xmlns="http://schemas.microsoft.com/win/2004/08/events">
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema">
   <instrumentation>
     <events>
       <provider
@@ -9,36 +11,56 @@
           symbol="AgentLensProvider"
           resourceFileName="AgentLensKernel.sys"
           messageFileName="AgentLensKernel.sys">
+        <channels>
+          <channel name="AgentLens/Analytic" chid="AgentLens_Analytic" type="Analytic" enabled="false" />
+        </channels>
+        <tasks>
+          <task name="AgentLensTask" symbol="AgentLensTask" value="1" />
+        </tasks>
+        <templates>
+          <template tid="AgentLensEventTemplate">
+            <data name="StructSize" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="Version" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="EventType" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="ResultStatus" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="Sequence" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="Timestamp" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="ProcessId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="ThreadId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="ParentProcessId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="CorrelationId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="SessionId" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="AgentSessionId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="ConversationId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="ToolCallId" inType="win:UInt64" outType="xs:unsignedLong" />
+            <data name="Flags" inType="win:UInt32" outType="xs:unsignedInt" />
+            <data name="PayloadLength" inType="win:UInt32" outType="xs:unsignedInt" />
+          </template>
+        </templates>
         <events>
-          <event value="1001" symbol="Event_ProcessCreate" version="0"
-              channel="AgentLens/Analytic" level="win:Informational"
-              message="$(string.AgentLens.event.1001.message)" />
-          <event value="1002" symbol="Event_ProcessExit" version="0"
-              channel="AgentLens/Analytic" level="win:Informational"
-              message="$(string.AgentLens.event.1002.message)" />
-          <event value="1003" symbol="Event_FileAccess" version="0"
-              channel="AgentLens/Analytic" level="win:Informational"
-              message="$(string.AgentLens.event.1003.message)" />
-          <event value="1004" symbol="Event_RegistryAccess" version="0"
-              channel="AgentLens/Analytic" level="win:Informational"
-              message="$(string.AgentLens.event.1004.message)" />
-          <event value="1005" symbol="Event_NetworkAccess" version="0"
-              channel="AgentLens/Analytic" level="win:Informational"
-              message="$(string.AgentLens.event.1005.message)" />
+          <!--
+            AgentLensKernel writes a single versioned event (id 1000) whose
+            user data is AGL_EVENT_HEADER followed by a type-specific payload.
+            The template below describes the stable header. Consumers that need
+            the payload use the AGL_EVENT_SCHEMA_VERSION inside the header and
+            parse it with the AgentLens protocol definitions.
+          -->
+          <event value="1000" symbol="Event_EventRecord" version="0"
+              channel="AgentLens/Analytic"
+              level="win:Informational"
+              task="AgentLensTask"
+              opcode="win:Info"
+              template="AgentLensEventTemplate"
+              message="$(string.AgentLens.event.1000.message)" />
         </events>
       </provider>
     </events>
-    <channels>
-      <channel name="AgentLens/Analytic" chid="AgentLens_Analytic" type="Analytic" enabled="false" />
-    </channels>
-    <resources>
+  </instrumentation>
+  <localization>
+    <resources culture="en-US">
       <stringTable>
-        <string id="AgentLens.event.1001.message" value="AgentLens process create event" />
-        <string id="AgentLens.event.1002.message" value="AgentLens process exit event" />
-        <string id="AgentLens.event.1003.message" value="AgentLens file access event" />
-        <string id="AgentLens.event.1004.message" value="AgentLens registry access event" />
-        <string id="AgentLens.event.1005.message" value="AgentLens network access event" />
+        <string id="AgentLens.event.1000.message" value="AgentLens kernel event record" />
       </stringTable>
     </resources>
-  </instrumentation>
+  </localization>
 </instrumentationManifest>

@@ -79,109 +79,18 @@ namespace
 EventReader::EventReader(ControlClient& client)
     : m_client(client)
 {
-    OpenSharedRing();
 }
 
 EventReader::~EventReader()
 {
-    if (m_header)
-    {
-        UnmapViewOfFile(m_header);
-        m_header = nullptr;
-    }
-    if (m_mapping)
-    {
-        CloseHandle(m_mapping);
-        m_mapping = nullptr;
-    }
-    if (m_event)
-    {
-        CloseHandle(m_event);
-        m_event = nullptr;
-    }
-}
-
-bool EventReader::OpenSharedRing()
-{
-    m_event = OpenEventW(SYNCHRONIZE, FALSE, L"AgentLensEventReady");
-    if (!m_event)
-    {
-        return false;
-    }
-
-    m_mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, L"AgentLensEventRing");
-    if (!m_mapping)
-    {
-        return false;
-    }
-
-    void* view = MapViewOfFile(m_mapping, FILE_MAP_READ, 0, 0, 0);
-    if (!view)
-    {
-        return false;
-    }
-
-    m_header = static_cast<AGL_EVENT_RING_SHARED_HEADER*>(view);
-    m_data = reinterpret_cast<uint8_t*>(view) + sizeof(AGL_EVENT_RING_SHARED_HEADER);
-    return m_header->Magic == AGL_EVENT_RING_MAGIC;
 }
 
 bool EventReader::ReadOnce(std::vector<uint8_t>& buffer)
 {
-    if (m_header)
-    {
-        if (ReadShared(buffer))
-        {
-            return true;
-        }
-    }
+    // The kernel is the only writer of the ring's consumer index. Reading
+    // through the control device keeps Head/Tail accounting in one place and
+    // avoids mapping shared memory writable in a privileged service.
     return m_client.ReadEvents(buffer);
-}
-
-bool EventReader::ReadShared(std::vector<uint8_t>& buffer)
-{
-    if (!m_header)
-    {
-        return false;
-    }
-
-    unsigned long long head = m_header->Head;
-    unsigned long long tail = m_header->Tail;
-    unsigned long long size = m_header->Size;
-    if (size == 0 || size > (1 << 24))
-    {
-        return false;
-    }
-
-    unsigned long long available;
-    if (head >= tail)
-    {
-        available = head - tail;
-    }
-    else
-    {
-        available = size - tail + head;
-    }
-
-    if (available == 0)
-    {
-        return false;
-    }
-
-    if (available > buffer.max_size())
-    {
-        available = buffer.max_size();
-    }
-
-    buffer.resize(static_cast<size_t>(available));
-    for (size_t i = 0; i < buffer.size(); i++)
-    {
-        unsigned long long pos = (tail + i) % size;
-        buffer[i] = m_data[pos];
-    }
-
-    m_header->Tail = (tail + available) % size;
-    return true;
 }
 
 void EventReader::PrintRawEvents(const std::vector<uint8_t>& buffer) const
@@ -241,7 +150,12 @@ void EventReader::PrintJsonEvents(
 
         const auto* header = reinterpret_cast<const AGL_EVENT_HEADER*>(
             p + sizeof(AGL_RING_RECORD_HEADER));
-        if (header->StructSize < sizeof(AGL_EVENT_HEADER))
+        if (header->StructSize < sizeof(AGL_EVENT_HEADER) ||
+            header->StructSize >
+                recordHeader->RecordLength - sizeof(AGL_RING_RECORD_HEADER) ||
+            header->PayloadLength >
+                recordHeader->RecordLength - sizeof(AGL_RING_RECORD_HEADER) -
+                    header->StructSize)
         {
             break;
         }
@@ -260,9 +174,7 @@ void EventReader::PrintJsonEvents(
             continue;
         }
 
-        const uint8_t* payload = p + sizeof(AGL_RING_RECORD_HEADER) + sizeof(AGL_EVENT_HEADER);
         ULONG payloadLength = header->PayloadLength;
-        (void)payload;
 
         std::wstring json = L"{";
         json += L"\"schema\":" + std::to_wstring(AGL_EVENT_SCHEMA_VERSION) + L",";
@@ -291,7 +203,10 @@ void EventReader::PrintJsonEvents(
         case AGL_EVENT_FILE_QUERY:
         case AGL_EVENT_FILE_SECURITY:
         case AGL_EVENT_FILE_DIRECTORY:
-            if (payloadLength >= sizeof(AGL_FILE_EVENT) - sizeof(AGL_EVENT_HEADER))
+        {
+            const ULONG fixedLength =
+                sizeof(AGL_FILE_EVENT) - sizeof(AGL_EVENT_HEADER);
+            if (payloadLength >= fixedLength)
             {
                 const auto* file = reinterpret_cast<const AGL_FILE_EVENT*>(
                     p + sizeof(AGL_RING_RECORD_HEADER));
@@ -303,9 +218,15 @@ void EventReader::PrintJsonEvents(
                 json += L",\"security_information\":" + std::to_wstring(file->SecurityInformation);
                 json += L",\"info_class\":" + std::to_wstring(file->InfoClass);
                 json += L",\"name_length\":" + std::to_wstring(file->NameLength);
-                json += L",\"path\":\"" + JsonEscape(file->Data, file->PathLength / sizeof(wchar_t)) + L"\"";
+                if (file->PathLength <= payloadLength - fixedLength)
+                {
+                    json += L",\"path\":\"" +
+                        JsonEscape(file->Data, file->PathLength / sizeof(wchar_t)) +
+                        L"\"";
+                }
             }
             break;
+        }
 
         case AGL_EVENT_REGISTRY_OPEN:
         case AGL_EVENT_REGISTRY_QUERY:
@@ -314,7 +235,10 @@ void EventReader::PrintJsonEvents(
         case AGL_EVENT_REGISTRY_ENUM_VALUE:
         case AGL_EVENT_REGISTRY_DELETE_KEY:
         case AGL_EVENT_REGISTRY_DELETE_VALUE:
-            if (payloadLength >= sizeof(AGL_REGISTRY_EVENT) - sizeof(AGL_EVENT_HEADER))
+        {
+            const ULONG fixedLength =
+                sizeof(AGL_REGISTRY_EVENT) - sizeof(AGL_EVENT_HEADER);
+            if (payloadLength >= fixedLength)
             {
                 const auto* reg = reinterpret_cast<const AGL_REGISTRY_EVENT*>(
                     p + sizeof(AGL_RING_RECORD_HEADER));
@@ -325,9 +249,15 @@ void EventReader::PrintJsonEvents(
                 json += L",\"flags\":" + std::to_wstring(reg->Flags);
                 json += L",\"index\":" + std::to_wstring(reg->Index);
                 json += L",\"info_class\":" + std::to_wstring(reg->InfoClass);
-                json += L",\"path\":\"" + JsonEscape(reg->Data, reg->PathLength / sizeof(wchar_t)) + L"\"";
+                if (reg->PathLength <= payloadLength - fixedLength)
+                {
+                    json += L",\"path\":\"" +
+                        JsonEscape(reg->Data, reg->PathLength / sizeof(wchar_t)) +
+                        L"\"";
+                }
             }
             break;
+        }
 
         case AGL_EVENT_NETWORK_CONNECT:
         case AGL_EVENT_NETWORK_FLOW_ESTABLISHED:
@@ -363,7 +293,10 @@ void EventReader::PrintJsonEvents(
             break;
 
         case AGL_EVENT_NETWORK_DOMAIN:
-            if (payloadLength >= sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER))
+        {
+            const ULONG fixedLength =
+                sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER);
+            if (payloadLength >= fixedLength)
             {
                 const auto* domain = reinterpret_cast<const AGL_DOMAIN_EVENT*>(
                     p + sizeof(AGL_RING_RECORD_HEADER));
@@ -371,9 +304,15 @@ void EventReader::PrintJsonEvents(
                 json += L",\"protocol\":" + std::to_wstring(domain->Protocol);
                 json += L",\"remote_port\":" + std::to_wstring(domain->RemotePort);
                 json += L",\"local_port\":" + std::to_wstring(domain->LocalPort);
-                json += L",\"sni\":\"" + JsonEscape(domain->Data, domain->SniLength / sizeof(wchar_t)) + L"\"";
+                if (domain->SniLength <= payloadLength - fixedLength)
+                {
+                    json += L",\"sni\":\"" +
+                        JsonEscape(domain->Data, domain->SniLength / sizeof(wchar_t)) +
+                        L"\"";
+                }
             }
             break;
+        }
 
         case AGL_EVENT_TOKEN_ANOMALY:
             if (payloadLength >= sizeof(AGL_TOKEN_EVENT) - sizeof(AGL_EVENT_HEADER))

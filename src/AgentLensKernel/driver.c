@@ -171,6 +171,7 @@ void AglDriverUnload(PDRIVER_OBJECT DriverObject)
         AglEventInit = FALSE;
     }
 
+    AglEtwUninitialize();
     AglPolicyUninitialize();
     AglContextFlushTombstones();
     AglContextDestroy();

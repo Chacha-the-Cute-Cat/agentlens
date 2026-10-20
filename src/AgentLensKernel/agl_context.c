@@ -21,50 +21,60 @@ void AglContextInitialize(void)
 void AglContextDestroy(void)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
+    LIST_ENTRY processList;
+    LIST_ENTRY threadList;
+    LIST_ENTRY imageList;
+    LIST_ENTRY flowList;
     PLIST_ENTRY entry;
-    PLIST_ENTRY next;
+
+    InitializeListHead(&processList);
+    InitializeListHead(&threadList);
+    InitializeListHead(&imageList);
+    InitializeListHead(&flowList);
 
     KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
-    entry = AglContext.ProcessList.Flink;
-    while (entry != &AglContext.ProcessList)
+    while (!IsListEmpty(&AglContext.ProcessList))
     {
-        next = entry->Flink;
-        RemoveEntryList(entry);
-        AglFreeProcessCtx(CONTAINING_RECORD(entry, AGL_PROCESS_CTX, ListEntry));
-        entry = next;
+        InsertTailList(&processList, RemoveHeadList(&AglContext.ProcessList));
+    }
+    while (!IsListEmpty(&AglContext.ThreadList))
+    {
+        InsertTailList(&threadList, RemoveHeadList(&AglContext.ThreadList));
+    }
+    while (!IsListEmpty(&AglContext.ImageList))
+    {
+        InsertTailList(&imageList, RemoveHeadList(&AglContext.ImageList));
+    }
+    while (!IsListEmpty(&AglContext.FlowList))
+    {
+        InsertTailList(&flowList, RemoveHeadList(&AglContext.FlowList));
     }
     AglContext.ProcessCount = 0;
-
-    entry = AglContext.ThreadList.Flink;
-    while (entry != &AglContext.ThreadList)
-    {
-        next = entry->Flink;
-        RemoveEntryList(entry);
-        AglFree(CONTAINING_RECORD(entry, AGL_THREAD_CTX, ListEntry));
-        entry = next;
-    }
     AglContext.ThreadCount = 0;
-
-    entry = AglContext.ImageList.Flink;
-    while (entry != &AglContext.ImageList)
-    {
-        next = entry->Flink;
-        RemoveEntryList(entry);
-        AglFree(CONTAINING_RECORD(entry, AGL_IMAGE_CTX, ListEntry));
-        entry = next;
-    }
     AglContext.ImageCount = 0;
-
-    entry = AglContext.FlowList.Flink;
-    while (entry != &AglContext.FlowList)
-    {
-        next = entry->Flink;
-        RemoveEntryList(entry);
-        AglFree(CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry));
-        entry = next;
-    }
     AglContext.FlowCount = 0;
     KeReleaseInStackQueuedSpinLock(&lockHandle);
+
+    while (!IsListEmpty(&processList))
+    {
+        entry = RemoveHeadList(&processList);
+        AglFreeProcessCtx(CONTAINING_RECORD(entry, AGL_PROCESS_CTX, ListEntry));
+    }
+    while (!IsListEmpty(&threadList))
+    {
+        entry = RemoveHeadList(&threadList);
+        AglFree(CONTAINING_RECORD(entry, AGL_THREAD_CTX, ListEntry));
+    }
+    while (!IsListEmpty(&imageList))
+    {
+        entry = RemoveHeadList(&imageList);
+        AglFree(CONTAINING_RECORD(entry, AGL_IMAGE_CTX, ListEntry));
+    }
+    while (!IsListEmpty(&flowList))
+    {
+        entry = RemoveHeadList(&flowList);
+        AglFree(CONTAINING_RECORD(entry, AGL_NET_FLOW_CTX, ListEntry));
+    }
 }
 
 void AglContextFlushTombstones(void)
@@ -274,9 +284,9 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
             ctx->RefCount = 1;
             ctx->Version = 1;
 
-            AglCopyUnicodeString(ImagePath, &ctx->ImagePath, PagedPool);
-            AglCopyUnicodeString(ImageName, &ctx->ImageName, PagedPool);
-            AglCopyUnicodeString(CommandLine, &ctx->CommandLine, PagedPool);
+            AglCopyUnicodeString(ImagePath, &ctx->ImagePath, NonPagedPool);
+            AglCopyUnicodeString(ImageName, &ctx->ImageName, NonPagedPool);
+            AglCopyUnicodeString(CommandLine, &ctx->CommandLine, NonPagedPool);
 
             InsertTailList(&AglContext.ProcessList, &ctx->ListEntry);
             AglContext.ProcessCount++;

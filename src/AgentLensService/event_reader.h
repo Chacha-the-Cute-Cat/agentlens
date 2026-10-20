@@ -23,12 +23,5 @@ public:
         const DnsAssociator* dns = nullptr) const;
 
 private:
-    bool OpenSharedRing();
-    bool ReadShared(std::vector<uint8_t>& buffer);
-
     ControlClient& m_client;
-    HANDLE m_event = nullptr;
-    HANDLE m_mapping = nullptr;
-    AGL_EVENT_RING_SHARED_HEADER* m_header = nullptr;
-    uint8_t* m_data = nullptr;
 };

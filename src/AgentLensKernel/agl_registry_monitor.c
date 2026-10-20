@@ -43,6 +43,11 @@ static void AglRegistryAddCtx(PVOID Object, PCUNICODE_STRING Path)
     AGL_REGISTRY_CTX* ctx;
     KLOCK_QUEUE_HANDLE lockHandle;
 
+    if (!Object)
+    {
+        return;
+    }
+
     KeAcquireInStackQueuedSpinLock(&AglRegistryCtxLock, &lockHandle);
     ctx = AglRegistryFindCtxLocked(Object);
     if (ctx)
@@ -68,23 +73,39 @@ static void AglRegistryAddCtx(PVOID Object, PCUNICODE_STRING Path)
     KeReleaseInStackQueuedSpinLock(&lockHandle);
 }
 
-static void AglRegistryRemoveCtx(PVOID Object)
+static void AglRegistryReleaseCtx(PVOID Object)
 {
     AGL_REGISTRY_CTX* ctx;
+    AGL_REGISTRY_CTX* toFree = NULL;
     KLOCK_QUEUE_HANDLE lockHandle;
+
+    if (!Object)
+    {
+        return;
+    }
 
     KeAcquireInStackQueuedSpinLock(&AglRegistryCtxLock, &lockHandle);
     ctx = AglRegistryFindCtxLocked(Object);
     if (ctx)
     {
-        RemoveEntryList(&ctx->ListEntry);
-        KeReleaseInStackQueuedSpinLock(&lockHandle);
-        AglFreeUnicodeString(&ctx->Path);
-        ObDereferenceObject(ctx->Object);
-        AglFree(ctx);
-        return;
+        if (ctx->RefCount > 1)
+        {
+            ctx->RefCount--;
+        }
+        else
+        {
+            RemoveEntryList(&ctx->ListEntry);
+            toFree = ctx;
+        }
     }
     KeReleaseInStackQueuedSpinLock(&lockHandle);
+
+    if (toFree)
+    {
+        AglFreeUnicodeString(&toFree->Path);
+        ObDereferenceObject(toFree->Object);
+        AglFree(toFree);
+    }
 }
 
 static void AglRegistryCleanupCtxList(void)
@@ -420,10 +441,18 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
         notifyClass == (ULONG)RegNtPostOpenKeyEx)
     {
         REG_POST_CREATE_KEY_INFORMATION* info = (REG_POST_CREATE_KEY_INFORMATION*)Arg2;
-        if (NT_SUCCESS(info->Status))
+        if (info->Status == STATUS_SUCCESS)
         {
             AglRegistryAddCtx(info->Object, info->CompleteName);
         }
+        return STATUS_SUCCESS;
+    }
+
+    if (notifyClass == (ULONG)RegNtPreKeyHandleClose)
+    {
+        REG_KEY_HANDLE_CLOSE_INFORMATION* info =
+            (REG_KEY_HANDLE_CLOSE_INFORMATION*)Arg2;
+        AglRegistryReleaseCtx(info->Object);
         return STATUS_SUCCESS;
     }
 
@@ -539,7 +568,6 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
         eventType = AGL_EVENT_REGISTRY_DELETE_KEY;
         desiredAccess = DELETE;
         REG_DELETE_KEY_INFORMATION* info = (REG_DELETE_KEY_INFORMATION*)Arg2;
-        AglRegistryRemoveCtx(info->Object);
         if (NT_SUCCESS(AglRegistryGetObjectPath(
                 info->Object,
                 objPathBuffer,

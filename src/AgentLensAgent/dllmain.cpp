@@ -70,6 +70,37 @@ static ULONG Fnv1a(const uint8_t* data, size_t length)
     return hash;
 }
 
+static std::wstring JsonEscape(const std::wstring& value)
+{
+    std::wstring escaped;
+    escaped.reserve(value.size() + 8);
+
+    for (wchar_t ch : value)
+    {
+        switch (ch)
+        {
+        case L'\\': escaped += L"\\\\"; break;
+        case L'"': escaped += L"\\\""; break;
+        case L'\r': escaped += L"\\r"; break;
+        case L'\n': escaped += L"\\n"; break;
+        case L'\t': escaped += L"\\t"; break;
+        default:
+            if (ch < 0x20)
+            {
+                wchar_t buffer[8] = { 0 };
+                swprintf_s(buffer, L"\\u%04X", static_cast<unsigned>(ch));
+                escaped += buffer;
+            }
+            else
+            {
+                escaped += ch;
+            }
+            break;
+        }
+    }
+    return escaped;
+}
+
 static ULONG VerifyImageSignature(const wchar_t* path)
 {
     WINTRUST_FILE_INFO fileInfo = {};
@@ -265,11 +296,11 @@ static DWORD WINAPI AgentPipeThread(LPVOID)
 
     std::wstring json = L"{\"source\":\"AgentLensAgent\",";
     json += L"\"pid\":" + std::to_wstring(GetCurrentProcessId()) + L",";
-    json += L"\"image\":\"" + std::wstring(path) + L"\",";
-    json += L"\"command\":\"" + std::wstring(GetCommandLineW()) + L"\",";
-    json += L"\"cwd\":\"" + std::wstring(cwd) + L"\",";
+    json += L"\"image\":\"" + JsonEscape(std::wstring(path)) + L"\",";
+    json += L"\"command\":\"" + JsonEscape(std::wstring(GetCommandLineW())) + L"\",";
+    json += L"\"cwd\":\"" + JsonEscape(std::wstring(cwd)) + L"\",";
     json += L"\"env_count\":" + std::to_wstring(envCount) + L",";
-    json += L"\"callstack\":\"" + callstack + L"\"}";
+    json += L"\"callstack\":\"" + JsonEscape(callstack) + L"\"}";
 
     UpdateKernelContext(GetCurrentProcessId(), envCount, cwd);
     UpdateImageContext();
