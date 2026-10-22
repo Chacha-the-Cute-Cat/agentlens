@@ -4,6 +4,7 @@
 #include "dns_associator.h"
 
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <string>
 
@@ -40,6 +41,7 @@ namespace
         case AGL_EVENT_NETWORK_FLOW_ESTABLISHED: return L"network.flow_established";
         case AGL_EVENT_NETWORK_FLOW_CLOSED: return L"network.flow_closed";
         case AGL_EVENT_TOKEN_ANOMALY: return L"token.anomaly";
+        case AGL_EVENT_POLICY_DENY: return L"policy.deny";
         default: return L"unknown";
         }
     }
@@ -73,6 +75,33 @@ namespace
             }
         }
         return out;
+    }
+
+    bool ReadPayloadString(
+        const uint8_t*& cursor,
+        size_t& remaining,
+        unsigned long bytes,
+        std::wstring& value)
+    {
+        if ((bytes & 1) != 0 || bytes > remaining)
+        {
+            return false;
+        }
+
+        value.assign(bytes / sizeof(wchar_t), L'\0');
+        if (bytes != 0)
+        {
+            memcpy(&value[0], cursor, bytes);
+        }
+        cursor += bytes;
+        remaining -= bytes;
+
+        if (remaining >= sizeof(wchar_t))
+        {
+            cursor += sizeof(wchar_t);
+            remaining -= sizeof(wchar_t);
+        }
+        return true;
     }
 }
 
@@ -134,7 +163,8 @@ void EventReader::PrintJsonEvents(
     FILE* output,
     unsigned long long filterPid,
     unsigned long filterType,
-    const DnsAssociator* dns) const
+    const DnsAssociator* dns,
+    bool mirrorToConsole) const
 {
     const uint8_t* p = buffer.data();
     size_t remaining = buffer.size();
@@ -194,6 +224,89 @@ void EventReader::PrintJsonEvents(
 
         switch (header->EventType)
         {
+        case AGL_EVENT_PROCESS_CREATE:
+        case AGL_EVENT_PROCESS_EXIT:
+        {
+            const ULONG fixedLength =
+                sizeof(AGL_PROCESS_EVENT) - sizeof(AGL_EVENT_HEADER);
+            if (payloadLength >= fixedLength)
+            {
+                const auto* process = reinterpret_cast<const AGL_PROCESS_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"create_time\":" + std::to_wstring(process->CreateTime);
+                json += L",\"image_path_length\":" + std::to_wstring(process->ImagePathLength);
+                json += L",\"image_name_length\":" + std::to_wstring(process->ImageNameLength);
+                json += L",\"command_line_length\":" + std::to_wstring(process->CommandLineLength);
+
+                const uint8_t* cursor = reinterpret_cast<const uint8_t*>(process->Data);
+                size_t payloadRemaining = payloadLength - fixedLength;
+                std::wstring imagePath;
+                std::wstring imageName;
+                std::wstring commandLine;
+                if (ReadPayloadString(cursor, payloadRemaining, process->ImagePathLength, imagePath))
+                {
+                    json += L",\"path\":\"" + JsonEscape(imagePath.data(), imagePath.size()) + L"\"";
+                }
+                if (ReadPayloadString(cursor, payloadRemaining, process->ImageNameLength, imageName))
+                {
+                    json += L",\"name\":\"" + JsonEscape(imageName.data(), imageName.size()) + L"\"";
+                }
+                if (ReadPayloadString(cursor, payloadRemaining, process->CommandLineLength, commandLine))
+                {
+                    json += L",\"command_line\":\"" +
+                        JsonEscape(commandLine.data(), commandLine.size()) + L"\"";
+                }
+            }
+            break;
+        }
+
+        case AGL_EVENT_THREAD_CREATE:
+        case AGL_EVENT_THREAD_EXIT:
+            if (payloadLength >= sizeof(unsigned long long))
+            {
+                unsigned long long createTime = 0;
+                memcpy(&createTime, p + sizeof(AGL_RING_RECORD_HEADER) + sizeof(AGL_EVENT_HEADER), sizeof(createTime));
+                json += L",\"thread_create_time\":" + std::to_wstring(createTime);
+            }
+            break;
+
+        case AGL_EVENT_IMAGE_LOAD:
+        {
+            const ULONG fixedLength =
+                sizeof(AGL_IMAGE_EVENT) - sizeof(AGL_EVENT_HEADER);
+            if (payloadLength >= fixedLength)
+            {
+                const auto* image = reinterpret_cast<const AGL_IMAGE_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"image_base\":" + std::to_wstring(image->ImageBase);
+                json += L",\"image_size\":" + std::to_wstring(image->ImageSize);
+                json += L",\"path_length\":" + std::to_wstring(image->PathLength);
+                if ((image->PathLength & 1) == 0 &&
+                    image->PathLength <= payloadLength - fixedLength)
+                {
+                    std::wstring path(image->PathLength / sizeof(wchar_t), L'\0');
+                    if (!path.empty())
+                    {
+                        memcpy(&path[0], image->Data, image->PathLength);
+                    }
+                    json += L",\"path\":\"" + JsonEscape(path.data(), path.size()) + L"\"";
+                }
+            }
+            break;
+        }
+
+        case AGL_EVENT_OBJECT_HANDLE:
+            if (payloadLength >= sizeof(AGL_OBJECT_EVENT) - sizeof(AGL_EVENT_HEADER))
+            {
+                const auto* object = reinterpret_cast<const AGL_OBJECT_EVENT*>(
+                    p + sizeof(AGL_RING_RECORD_HEADER));
+                json += L",\"object_type\":" + std::to_wstring(object->ObjectType);
+                json += L",\"desired_access\":" + std::to_wstring(object->DesiredAccess);
+                json += L",\"granted_access\":" + std::to_wstring(object->GrantedAccess);
+                json += L",\"target_pid\":" + std::to_wstring(object->TargetProcessId);
+            }
+            break;
+
         case AGL_EVENT_FILE_OPEN:
         case AGL_EVENT_FILE_RENAME:
         case AGL_EVENT_FILE_READ:
@@ -333,10 +446,12 @@ void EventReader::PrintJsonEvents(
         if (output)
         {
             fwprintf(output, L"%s\n", json.c_str());
+            fflush(output);
         }
-        else
+        if (!output || mirrorToConsole)
         {
             wprintf(L"%s\n", json.c_str());
+            fflush(stdout);
         }
 
         p += recordHeader->RecordLength;

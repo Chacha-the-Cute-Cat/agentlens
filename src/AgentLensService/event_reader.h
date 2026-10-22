@@ -20,7 +20,8 @@ public:
         FILE* output = nullptr,
         unsigned long long filterPid = 0,
         unsigned long filterType = 0,
-        const DnsAssociator* dns = nullptr) const;
+        const DnsAssociator* dns = nullptr,
+        bool mirrorToConsole = false) const;
 
 private:
     ControlClient& m_client;

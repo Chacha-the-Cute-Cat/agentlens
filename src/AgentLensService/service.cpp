@@ -16,15 +16,21 @@ static SERVICE_STATUS g_status{};
 static FILE* g_eventOutput = nullptr;
 static unsigned long long g_filterPid = 0;
 static unsigned long g_filterType = 0;
+static bool g_mirrorEventsToConsole = false;
 static HANDLE g_stopEvent = nullptr;
 static std::wstring g_policyPath;
 static bool g_policyPathExplicit = false;
 
-void SetEventOptions(FILE* output, unsigned long long filterPid, unsigned long filterType)
+void SetEventOptions(
+    FILE* output,
+    unsigned long long filterPid,
+    unsigned long filterType,
+    bool mirrorToConsole)
 {
     g_eventOutput = output;
     g_filterPid = filterPid;
     g_filterType = filterType;
+    g_mirrorEventsToConsole = mirrorToConsole;
 }
 
 void SetPolicyPath(const wchar_t* path)
@@ -104,17 +110,53 @@ static bool CreateStopEvent()
 static void RunEventLoop(
     ControlClient& client,
     EventReader& reader,
-    DnsAssociator& dns)
+    DnsAssociator& dns,
+    Logger& logger)
 {
     std::vector<BYTE> buffer;
+    ULONGLONG nextReconnect = 0;
+    bool reconnectLogged = false;
 
     while (WaitForSingleObject(g_stopEvent, 0) != WAIT_OBJECT_0)
     {
         if (!reader.ReadOnce(buffer))
         {
+            DWORD error = client.LastError();
+            if (error != ERROR_NO_MORE_ITEMS && error != ERROR_SUCCESS)
+            {
+                if (!reconnectLogged)
+                {
+                    logger.Error(
+                        L"Event read failed with error " +
+                        std::to_wstring(error) +
+                        L"; waiting for AgentLensKernel.");
+                    reconnectLogged = true;
+                }
+
+                ULONGLONG now = GetTickCount64();
+                if (now >= nextReconnect)
+                {
+                    client.Close();
+                    if (client.Open())
+                    {
+                        AGL_VERSION_INFO version{};
+                        if (client.GetVersion(version) && client.Subscribe(0, 0))
+                        {
+                            logger.Info(L"Reconnected to AgentLensKernel.");
+                            reconnectLogged = false;
+                        }
+                        else
+                        {
+                            client.Close();
+                        }
+                    }
+                    nextReconnect = now + 1000;
+                }
+            }
             WaitForSingleObject(g_stopEvent, 100);
             continue;
         }
+        reconnectLogged = false;
         if (!buffer.empty())
         {
             reader.PrintJsonEvents(
@@ -122,7 +164,8 @@ static void RunEventLoop(
                 g_eventOutput,
                 g_filterPid,
                 g_filterType,
-                &dns);
+                &dns,
+                g_mirrorEventsToConsole);
         }
     }
 
@@ -174,7 +217,7 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
     }
 
     UpdateStatus(SERVICE_START_PENDING, NO_ERROR, 3000);
-    Logger logger;
+    Logger logger(GetDefaultServiceLogPath());
     logger.Info(L"Starting AgentLensService.");
 
     if (!CreateStopEvent())
@@ -183,7 +226,10 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
         UpdateStatus(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR, 0);
         return;
     }
-    StartAgentServer();
+    if (!StartAgentServer())
+    {
+        logger.Error(L"Failed to start the AgentLensAgent named-pipe server.");
+    }
 
     ControlClient client;
     if (!client.Open())
@@ -197,10 +243,18 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
     }
 
     AGL_VERSION_INFO version{};
-    if (client.GetVersion(version))
+    if (!client.GetVersion(version))
     {
-        logger.Info(L"Connected to AgentLensKernel.");
+        logger.Error(
+            L"Failed to query AgentLensKernel version. Win32 error: " +
+            std::to_wstring(client.LastError()));
+        StopAgentServer();
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        UpdateStatus(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR, 0);
+        return;
     }
+    logger.Info(L"Connected to AgentLensKernel.");
 
     if (!ApplyPolicy(client, logger))
     {
@@ -211,14 +265,27 @@ static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv)
         return;
     }
 
-    client.Subscribe(0, 0);
+    if (!client.Subscribe(0, 0))
+    {
+        logger.Error(
+            L"Failed to subscribe to AgentLensKernel events. Win32 error: " +
+            std::to_wstring(client.LastError()));
+        StopAgentServer();
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        UpdateStatus(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR, 0);
+        return;
+    }
     EventReader reader(client);
     DnsAssociator dns;
-    dns.Start();
+    if (!dns.Start())
+    {
+        logger.Error(L"Failed to start DNS event association; network IP events remain available.");
+    }
 
     UpdateStatus(SERVICE_RUNNING, NO_ERROR, 0);
 
-    RunEventLoop(client, reader, dns);
+    RunEventLoop(client, reader, dns, logger);
 
     CloseHandle(g_stopEvent);
     g_stopEvent = nullptr;
@@ -241,7 +308,7 @@ int RunService()
 
 int RunConsole()
 {
-    Logger logger;
+    Logger logger(GetDefaultServiceLogPath(), true);
     logger.Info(L"Running AgentLensService in console mode.");
 
     if (!CreateStopEvent())
@@ -250,7 +317,10 @@ int RunConsole()
         return 1;
     }
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-    StartAgentServer();
+    if (!StartAgentServer())
+    {
+        logger.Error(L"Failed to start the AgentLensAgent named-pipe server.");
+    }
 
     ControlClient client;
     if (!client.Open())
@@ -271,12 +341,35 @@ int RunConsole()
         return 1;
     }
 
-    client.Subscribe(0, 0);
+    AGL_VERSION_INFO version{};
+    if (!client.GetVersion(version))
+    {
+        logger.Error(
+            L"Failed to query AgentLensKernel version. Win32 error: " +
+            std::to_wstring(client.LastError()));
+        StopAgentServer();
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        return 1;
+    }
+    if (!client.Subscribe(0, 0))
+    {
+        logger.Error(
+            L"Failed to subscribe to AgentLensKernel events. Win32 error: " +
+            std::to_wstring(client.LastError()));
+        StopAgentServer();
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        return 1;
+    }
     EventReader reader(client);
     DnsAssociator dns;
-    dns.Start();
+    if (!dns.Start())
+    {
+        logger.Error(L"Failed to start DNS event association; network IP events remain available.");
+    }
 
-    RunEventLoop(client, reader, dns);
+    RunEventLoop(client, reader, dns, logger);
 
     SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
     CloseHandle(g_stopEvent);

@@ -11,6 +11,35 @@ install.cmd Debug
 the single definition of the driver service. Generate and sign the catalog
 first when the test environment requires it.
 
+It also installs `AgentLensService` with a dependency on `AgentLensKernel`
+and delayed automatic startup. The default event log is:
+
+```text
+%ProgramData%\AgentLens\events.jsonl
+```
+
+Service diagnostics are appended to:
+
+```text
+%ProgramData%\AgentLens\service.log
+```
+
+For interactive testing, stop the installed service and run:
+
+```cmd
+sc.exe stop AgentLensService
+..\build\AgentLensService\x64\Release\AgentLensService.exe --console
+```
+
+Console mode mirrors status messages and event JSON to the screen while also
+appending them to the two default log files above.
+
+To override only the JSONL path:
+
+```cmd
+..\build\AgentLensService\x64\Release\AgentLensService.exe --console --output C:\agentlens-events.jsonl
+```
+
 ## Uninstall
 
 ```cmd

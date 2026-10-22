@@ -1,5 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <OutDir>$(SolutionDir)build\AgentLensKernel\$(Platform)\$(Configuration)\</OutDir>
+    <TargetDir>$(OutDir)</TargetDir>
+    <TargetPath>$(OutDir)$(TargetName)$(TargetExt)</TargetPath>
+  </PropertyGroup>
+
+  <!-- User-mode binaries use static CRT in every configuration. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64' and '$(MSBuildProjectName)' != 'AgentLensKernel'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64' and '$(MSBuildProjectName)' != 'AgentLensKernel'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!-- Kernel-mode drivers cannot link against the debug CRT. -->
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'AgentLensKernel'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
   <!-- Keep the driver integrity characteristic in every configuration. -->
   <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'AgentLensKernel'">
     <Link>

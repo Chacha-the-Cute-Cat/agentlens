@@ -48,9 +48,10 @@ private:
     bool OpenTraceSession();
     bool ParseDnsEvent(PEVENT_RECORD eventRecord);
     void AddBinding(unsigned long processId, const std::wstring& queryName, std::vector<std::wstring> addresses, unsigned long long timestamp);
+    void PruneBindingsLocked(unsigned long long timestamp) const;
 
     mutable std::mutex m_mutex;
-    std::map<Key, Binding> m_bindings;
+    mutable std::map<Key, Binding> m_bindings;
 
     std::wstring m_sessionName;
     TRACEHANDLE m_sessionHandle = 0;

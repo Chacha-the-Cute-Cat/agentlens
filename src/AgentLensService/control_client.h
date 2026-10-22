@@ -25,6 +25,7 @@ public:
     bool QueryProcess(ULONG64 processId, AGL_PROCESS_QUERY& query);
     bool LoadPolicy(const void* policy, ULONG length);
     bool ClearPolicy();
+    DWORD LastError() const;
 
 private:
     bool Call(
@@ -36,4 +37,5 @@ private:
         ULONG& bytesReturned);
 
     HANDLE m_handle = INVALID_HANDLE_VALUE;
+    DWORD m_lastError = ERROR_SUCCESS;
 };

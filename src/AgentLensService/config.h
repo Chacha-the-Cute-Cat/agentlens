@@ -10,3 +10,6 @@ struct AgentLensConfig
 };
 
 AgentLensConfig LoadConfig();
+std::wstring GetAgentLensDataDirectory();
+std::wstring GetDefaultEventLogPath();
+std::wstring GetDefaultServiceLogPath();

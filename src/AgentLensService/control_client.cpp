@@ -23,7 +23,14 @@ bool ControlClient::Open()
         0,
         nullptr);
 
-    return m_handle != INVALID_HANDLE_VALUE;
+    if (m_handle == INVALID_HANDLE_VALUE)
+    {
+        m_lastError = GetLastError();
+        return false;
+    }
+
+    m_lastError = ERROR_SUCCESS;
+    return true;
 }
 
 void ControlClient::Close()
@@ -33,6 +40,7 @@ void ControlClient::Close()
         CloseHandle(m_handle);
         m_handle = INVALID_HANDLE_VALUE;
     }
+    m_lastError = ERROR_SUCCESS;
 }
 
 bool ControlClient::IsOpen() const
@@ -48,6 +56,13 @@ bool ControlClient::Call(
     ULONG outputLength,
     ULONG& bytesReturned)
 {
+    m_lastError = ERROR_SUCCESS;
+    if (m_handle == INVALID_HANDLE_VALUE)
+    {
+        m_lastError = ERROR_INVALID_HANDLE;
+        return false;
+    }
+
     const ULONG headerSize = sizeof(AGL_CONTROL_HEADER);
     ULONG inSize = headerSize + inputLength;
     ULONG outSize = headerSize + outputLength;
@@ -79,6 +94,7 @@ bool ControlClient::Call(
 
     if (!ok)
     {
+        m_lastError = GetLastError();
         return false;
     }
 
@@ -94,6 +110,11 @@ bool ControlClient::Call(
     }
 
     return true;
+}
+
+DWORD ControlClient::LastError() const
+{
+    return m_lastError;
 }
 
 bool ControlClient::GetVersion(AGL_VERSION_INFO& info)

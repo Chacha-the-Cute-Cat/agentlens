@@ -1,10 +1,26 @@
 #include "service.h"
+#include "config.h"
 
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <share.h>
 #include <string>
+
+static bool OpenOutputFile(const std::wstring& path, FILE** output)
+{
+    std::filesystem::path filePath(path);
+    if (!filePath.parent_path().empty())
+    {
+        std::error_code error;
+        std::filesystem::create_directories(filePath.parent_path(), error);
+    }
+
+    *output = _wfsopen(path.c_str(), L"a, ccs=UTF-8", _SH_DENYNO);
+    return *output != nullptr;
+}
 
 static int ReplayEvents(const wchar_t* path, FILE* output)
 {
@@ -37,6 +53,7 @@ int wmain(int argc, wchar_t* argv[])
     unsigned long long filterPid = 0;
     unsigned long filterType = 0;
     const wchar_t* replayPath = nullptr;
+    std::wstring outputPath;
 
     for (int i = 1; i < argc; i++)
     {
@@ -46,7 +63,7 @@ int wmain(int argc, wchar_t* argv[])
         }
         else if (lstrcmpiW(argv[i], L"--output") == 0 && i + 1 < argc)
         {
-            _wfopen_s(&output, argv[++i], L"w, ccs=UTF-8");
+            outputPath = argv[++i];
         }
         else if (lstrcmpiW(argv[i], L"--filter-pid") == 0 && i + 1 < argc)
         {
@@ -64,6 +81,35 @@ int wmain(int argc, wchar_t* argv[])
         {
             SetPolicyPath(argv[++i]);
         }
+        else
+        {
+            fwprintf(
+                stderr,
+                L"Unknown or incomplete argument: %s\n",
+                argv[i]);
+            return 2;
+        }
+    }
+
+    if (!outputPath.empty())
+    {
+        if (!OpenOutputFile(outputPath, &output))
+        {
+            fwprintf(stderr, L"Failed to open event output: %s\n", outputPath.c_str());
+            return 2;
+        }
+    }
+    else if (!replayPath)
+    {
+        outputPath = GetDefaultEventLogPath();
+        if (!OpenOutputFile(outputPath, &output))
+        {
+            fwprintf(
+                stderr,
+                L"Failed to open default event output: %s\n",
+                outputPath.c_str());
+            return 2;
+        }
     }
 
     if (replayPath)
@@ -73,7 +119,17 @@ int wmain(int argc, wchar_t* argv[])
         return rc;
     }
 
-    SetEventOptions(output, filterPid, filterType);
+    SetEventOptions(output, filterPid, filterType, console);
+    if (console && !outputPath.empty())
+    {
+        wprintf(
+            L"[AgentLensService][INFO] Event log: %s\n",
+            outputPath.c_str());
+        wprintf(
+            L"[AgentLensService][INFO] Service log: %s\n",
+            GetDefaultServiceLogPath().c_str());
+        fflush(stdout);
+    }
     int rc = console ? RunConsole() : RunService();
     if (output)
     {

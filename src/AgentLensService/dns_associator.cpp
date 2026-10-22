@@ -15,6 +15,10 @@ namespace
         { 0xa3, 0xfe, 0xa3, 0x78, 0xb0, 0x3d, 0xdb, 0x4d }
     };
 
+    constexpr unsigned long long DnsBindingLifetime =
+        5ULL * 60ULL * 1000ULL * 1000ULL * 10ULL;
+    constexpr size_t MaxDnsBindings = 4096;
+
     DnsAssociator* g_associator = nullptr;
 
     bool FindProperty(PTRACE_EVENT_INFO info, const wchar_t* name, PEVENT_PROPERTY_INFO* outProperty)
@@ -452,6 +456,12 @@ void DnsAssociator::AddBinding(
     unsigned long long timestamp)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    PruneBindingsLocked(timestamp);
+    while (m_bindings.size() >= MaxDnsBindings)
+    {
+        m_bindings.erase(m_bindings.begin());
+    }
+
     Binding binding;
     binding.ProcessId = processId;
     binding.QueryName = queryName;
@@ -463,6 +473,12 @@ void DnsAssociator::AddBinding(
 std::wstring DnsAssociator::Resolve(unsigned long processId, const std::wstring& ip) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+    FILETIME nowFileTime{};
+    GetSystemTimeAsFileTime(&nowFileTime);
+    ULARGE_INTEGER now{};
+    now.LowPart = nowFileTime.dwLowDateTime;
+    now.HighPart = nowFileTime.dwHighDateTime;
+    PruneBindingsLocked(now.QuadPart);
 
     for (const auto& item : m_bindings)
     {
@@ -487,6 +503,22 @@ std::wstring DnsAssociator::Resolve(unsigned long processId, const std::wstring&
     }
 
     return L"";
+}
+
+void DnsAssociator::PruneBindingsLocked(unsigned long long timestamp) const
+{
+    for (auto it = m_bindings.begin(); it != m_bindings.end();)
+    {
+        if (timestamp > it->second.Timestamp &&
+            timestamp - it->second.Timestamp > DnsBindingLifetime)
+        {
+            it = m_bindings.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 std::wstring DnsAssociator::FormatIPv4(const unsigned char address[16])
