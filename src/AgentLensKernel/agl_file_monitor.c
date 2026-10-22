@@ -125,20 +125,10 @@ static void AglEmitFileEvent(
     ULONG SecurityInformation,
     ULONG NameLength)
 {
-#if !AGL_ENABLE_EVENT_DELIVERY
-    UNREFERENCED_PARAMETER(EventType);
-    UNREFERENCED_PARAMETER(Data);
-    UNREFERENCED_PARAMETER(FltObjects);
-    UNREFERENCED_PARAMETER(Offset);
-    UNREFERENCED_PARAMETER(Length);
-    UNREFERENCED_PARAMETER(InfoClass);
-    UNREFERENCED_PARAMETER(SecurityInformation);
-    UNREFERENCED_PARAMETER(NameLength);
-    return;
-#else
     UNREFERENCED_PARAMETER(FltObjects);
     FLT_FILE_NAME_INFORMATION* nameInfo = NULL;
     PFLT_IO_PARAMETER_BLOCK iopb = Data->Iopb;
+    ULONG fixedPayload = sizeof(AGL_FILE_EVENT) - sizeof(AGL_EVENT_HEADER);
     ULONG pathLength = 0;
     ULONG payloadLength = 0;
     PUCHAR buffer = NULL;
@@ -155,12 +145,12 @@ static void AglEmitFileEvent(
     }
 
     pathLength = nameInfo->Name.Length;
-    if (pathLength > AGL_MAX_EVENT_PAYLOAD - 32)
+    if (pathLength > AGL_MAX_EVENT_PAYLOAD - fixedPayload)
     {
-        pathLength = AGL_MAX_EVENT_PAYLOAD - 32;
+        pathLength = AGL_MAX_EVENT_PAYLOAD - fixedPayload;
     }
 
-    payloadLength = sizeof(AGL_FILE_EVENT) - sizeof(AGL_EVENT_HEADER) + pathLength;
+    payloadLength = fixedPayload + pathLength;
     buffer = AglAllocNonPaged(sizeof(AGL_EVENT_HEADER) + payloadLength);
     if (!buffer)
     {
@@ -201,7 +191,6 @@ static void AglEmitFileEvent(
 
     FltReleaseFileNameInformation(nameInfo);
     AglFree(buffer);
-#endif
 }
 
 static BOOLEAN AglFileShouldDenyCreate(PFLT_CALLBACK_DATA Data)
@@ -275,6 +264,11 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreCreate(
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
 
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (AglFileShouldDenyCreate(Data))
     {
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -321,6 +315,11 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreWrite(
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
 
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (AglFileShouldDenyWrite(Data))
     {
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
@@ -337,6 +336,11 @@ static FLT_PREOP_CALLBACK_STATUS AglFilePreSetInfo(
 {
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
     if (Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformation ||
         Data->Iopb->Parameters.SetFileInformation.FileInformationClass == FileRenameInformationEx ||
@@ -386,7 +390,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostRead(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
 
     if (NT_SUCCESS(Data->IoStatus.Status))
     {
@@ -408,7 +416,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostQuery(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
     if (NT_SUCCESS(Data->IoStatus.Status))
     {
     AglEmitFileEvent(
@@ -431,7 +443,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostSecurity(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
     if (NT_SUCCESS(Data->IoStatus.Status))
     {
     AglEmitFileEvent(
@@ -454,7 +470,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostDirectory(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
 
     /*
      * IRP_MJ_DIRECTORY_CONTROL also carries IRP_MN_NOTIFY_CHANGE_DIRECTORY.
@@ -485,7 +505,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostWrite(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
 
     if (NT_SUCCESS(Data->IoStatus.Status))
     {
@@ -507,7 +531,11 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostClose(
     FLT_POST_OPERATION_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(CompletionContext);
-    UNREFERENCED_PARAMETER(Flags);
+    if ((Flags & FLTFL_POST_OPERATION_DRAINING) != 0 ||
+        KeGetCurrentIrql() > APC_LEVEL)
+    {
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    }
     AglEmitFileEvent(AGL_EVENT_FILE_CLOSE, Data, FltObjects, 0, 0, 0, 0, 0);
     return FLT_POSTOP_FINISHED_PROCESSING;
 }

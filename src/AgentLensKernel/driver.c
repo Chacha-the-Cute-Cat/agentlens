@@ -35,9 +35,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 
     AglContextInitialize();
     AglPolicyInitialize();
-#if AGL_ENABLE_EVENT_DELIVERY
     AglEtwInitialize();
-#endif
 
     status = AglEventRingInitialize(1024 * 1024);
     if (!NT_SUCCESS(status))
@@ -118,10 +116,7 @@ Exit:
     if (AglControlInit) AglControlUninitialize(DriverObject);
     if (AglEventInit) AglEventRingDestroy();
     AglPolicyUninitialize();
-#if AGL_ENABLE_EVENT_DELIVERY
     AglEtwUninitialize();
-#endif
-    AglContextFlushTombstones();
     AglContextDestroy();
     return status;
 }
@@ -176,11 +171,8 @@ void AglDriverUnload(PDRIVER_OBJECT DriverObject)
         AglEventInit = FALSE;
     }
 
-#if AGL_ENABLE_EVENT_DELIVERY
     AglEtwUninitialize();
-#endif
     AglPolicyUninitialize();
-    AglContextFlushTombstones();
     AglContextDestroy();
     AglTraceInfo("AgentLensKernel unloaded.\n");
 }

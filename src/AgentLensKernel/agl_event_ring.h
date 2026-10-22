@@ -7,11 +7,8 @@
 typedef struct _AGL_EVENT_RING {
     KSPIN_LOCK Lock;
     PVOID      Base;
-    PVOID      SectionObject;
-    HANDLE     SectionHandle;
     PKEVENT    ReadyEventObject;
     SIZE_T     Size;
-    SIZE_T     DataOffset;
     SIZE_T     Head;      // write offset
     SIZE_T     Tail;      // read offset
     ULONG64    Written;

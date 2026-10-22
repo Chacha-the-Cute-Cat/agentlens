@@ -3,8 +3,8 @@
 #include "agl_context.h"
 #include "agl_util.h"
 #include "agl_etw.h"
+#include "driver.h"
 
-#if AGL_ENABLE_EVENT_DELIVERY
 static ULONG AglEventFlags(ULONG EventType)
 {
     if (EventType == AGL_EVENT_PROCESS_CREATE ||
@@ -20,7 +20,6 @@ static ULONG AglEventFlags(ULONG EventType)
     }
     return 0;
 }
-#endif
 
 static ULONG64 AglNow(void)
 {
@@ -40,18 +39,24 @@ NTSTATUS AglEventEmit(
     PVOID Payload,
     ULONG PayloadLength)
 {
-#if AGL_ENABLE_EVENT_DELIVERY
-    ULONG total = sizeof(AGL_EVENT_HEADER) + PayloadLength;
-    ULONG recordLength = sizeof(AGL_RING_RECORD_HEADER) + total;
+    ULONG total;
+    ULONG recordLength;
     PUCHAR buffer;
     AGL_RING_RECORD_HEADER* recordHeader;
     AGL_EVENT_HEADER* header;
     NTSTATUS status;
 
-    if (total > AGL_MAX_EVENT_PAYLOAD + sizeof(AGL_EVENT_HEADER))
+    if (!AglReady)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    if (PayloadLength > AGL_MAX_EVENT_PAYLOAD)
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
+    total = sizeof(AGL_EVENT_HEADER) + PayloadLength;
+    recordLength = sizeof(AGL_RING_RECORD_HEADER) + total;
 
     buffer = AglAllocNonPaged(recordLength);
     if (!buffer)
@@ -119,18 +124,6 @@ NTSTATUS AglEventEmit(
     }
     AglFree(buffer);
     return status;
-#else
-    UNREFERENCED_PARAMETER(EventType);
-    UNREFERENCED_PARAMETER(ResultStatus);
-    UNREFERENCED_PARAMETER(ProcessId);
-    UNREFERENCED_PARAMETER(ThreadId);
-    UNREFERENCED_PARAMETER(ParentProcessId);
-    UNREFERENCED_PARAMETER(CorrelationId);
-    UNREFERENCED_PARAMETER(SessionId);
-    UNREFERENCED_PARAMETER(Payload);
-    UNREFERENCED_PARAMETER(PayloadLength);
-    return STATUS_SUCCESS;
-#endif
 }
 
 NTSTATUS AglEventEmitProcess(
@@ -288,15 +281,17 @@ NTSTATUS AglEventEmitNetworkDomain(
     PCUNICODE_STRING Sni)
 {
     ULONG sniLength = Sni ? Sni->Length : 0;
-    ULONG payloadLength = sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER) + sniLength;
+    ULONG fixedPayload = sizeof(AGL_DOMAIN_EVENT) - sizeof(AGL_EVENT_HEADER);
+    ULONG payloadLength;
     PUCHAR buffer;
     AGL_DOMAIN_EVENT* event;
     NTSTATUS status;
 
-    if (sniLength > AGL_MAX_EVENT_PAYLOAD)
+    if (sniLength > AGL_MAX_EVENT_PAYLOAD - fixedPayload)
     {
-        sniLength = AGL_MAX_EVENT_PAYLOAD;
+        sniLength = AGL_MAX_EVENT_PAYLOAD - fixedPayload;
     }
+    payloadLength = fixedPayload + sniLength;
 
     buffer = AglAllocNonPaged(sizeof(AGL_EVENT_HEADER) + payloadLength);
     if (!buffer)
@@ -342,13 +337,14 @@ NTSTATUS AglEventEmitImage(
     PCUNICODE_STRING Path)
 {
     ULONG pathLen = Path ? Path->Length : 0;
+    ULONG fixedPayload = sizeof(AGL_IMAGE_EVENT) - sizeof(AGL_EVENT_HEADER);
     PUCHAR buffer;
     AGL_IMAGE_EVENT* event;
     NTSTATUS status;
 
-    if (pathLen > AGL_MAX_EVENT_PAYLOAD - 16)
+    if (pathLen > AGL_MAX_EVENT_PAYLOAD - fixedPayload)
     {
-        pathLen = AGL_MAX_EVENT_PAYLOAD - 16;
+        pathLen = AGL_MAX_EVENT_PAYLOAD - fixedPayload;
     }
 
     buffer = AglAllocNonPaged(sizeof(AGL_IMAGE_EVENT) + pathLen);

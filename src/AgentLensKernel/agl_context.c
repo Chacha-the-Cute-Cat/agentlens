@@ -1,6 +1,5 @@
 #include <ntifs.h>
 #include "agl_context.h"
-#include "agl_control.h"
 #include "agl_util.h"
 #include "agl_trace.h"
 
@@ -77,18 +76,6 @@ void AglContextDestroy(void)
     }
 }
 
-void AglContextFlushTombstones(void)
-{
-    LARGE_INTEGER delay;
-    ULONG i;
-
-    delay.QuadPart = -10 * 1000; // 10 ms
-    for (i = 0; i < 1000 && AglContext.PendingTombstones != 0; i++)
-    {
-        KeDelayExecutionThread(KernelMode, FALSE, &delay);
-    }
-}
-
 static void AglFreeProcessCtx(AGL_PROCESS_CTX* Ctx)
 {
     if (!Ctx)
@@ -101,47 +88,6 @@ static void AglFreeProcessCtx(AGL_PROCESS_CTX* Ctx)
     AglFreeUnicodeString(&Ctx->CommandLine);
     AglFreeUnicodeString(&Ctx->CurrentDirectory);
     AglFree(Ctx);
-}
-
-static VOID AglTombstoneWorker(PDEVICE_OBJECT DeviceObject, PVOID Context)
-{
-    AGL_PROCESS_CTX* ctx = (AGL_PROCESS_CTX*)Context;
-    LARGE_INTEGER delay;
-
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    delay.QuadPart = -5 * 1000 * 1000 * 10; // 5 seconds
-    KeDelayExecutionThread(KernelMode, FALSE, &delay);
-
-    if (ctx->WorkItem)
-    {
-        IoFreeWorkItem(ctx->WorkItem);
-        ctx->WorkItem = NULL;
-    }
-    AglFreeProcessCtx(ctx);
-    InterlockedDecrement(&AglContext.PendingTombstones);
-}
-
-static VOID AglQueueTombstone(AGL_PROCESS_CTX* Ctx)
-{
-    PIO_WORKITEM workItem;
-
-    if (InterlockedCompareExchange(&Ctx->TombstoneQueued, 1, 0) != 0)
-    {
-        return;
-    }
-
-    workItem = IoAllocateWorkItem(AglControlGetDevice());
-    if (!workItem)
-    {
-        InterlockedExchange(&Ctx->TombstoneQueued, 0);
-        AglFreeProcessCtx(Ctx);
-        return;
-    }
-
-    Ctx->WorkItem = workItem;
-    InterlockedIncrement(&AglContext.PendingTombstones);
-    IoQueueWorkItem(workItem, AglTombstoneWorker, DelayedWorkQueue, Ctx);
 }
 
 AGL_PROCESS_CTX* AglContextAcquireProcess(ULONG64 ProcessId)
@@ -219,14 +165,14 @@ void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx)
 
     if (refs == 0)
     {
-        if (tombstoned)
-        {
-            AglQueueTombstone(Ctx);
-        }
-        else
+        if (!tombstoned)
         {
             AglTraceError(
                 "Process context reference underflow; restored list reference.\n");
+        }
+        else
+        {
+            AglFreeProcessCtx(Ctx);
         }
     }
 }
@@ -316,7 +262,7 @@ void AglContextRemoveProcess(ULONG64 ProcessId)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
     PLIST_ENTRY entry;
-    AGL_PROCESS_CTX* itemToQueue = NULL;
+    AGL_PROCESS_CTX* itemToFree = NULL;
 
     KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
     for (entry = AglContext.ProcessList.Flink;
@@ -336,16 +282,16 @@ void AglContextRemoveProcess(ULONG64 ProcessId)
             }
             if (InterlockedDecrement(&item->RefCount) == 0)
             {
-                itemToQueue = item;
+                itemToFree = item;
             }
             break;
         }
     }
     KeReleaseInStackQueuedSpinLock(&lockHandle);
 
-    if (itemToQueue)
+    if (itemToFree)
     {
-        AglQueueTombstone(itemToQueue);
+        AglFreeProcessCtx(itemToFree);
     }
 }
 

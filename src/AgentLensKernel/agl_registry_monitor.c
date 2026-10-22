@@ -343,9 +343,16 @@ static NTSTATUS AglRegistryEmitEvent(
 {
     AGL_REGISTRY_EVENT* event = NULL;
     PUCHAR buffer = NULL;
+    ULONG fixedPayload = sizeof(AGL_REGISTRY_EVENT) - sizeof(AGL_EVENT_HEADER);
     ULONG pathLength = Path ? Path->Length : 0;
-    ULONG payloadLength = sizeof(AGL_REGISTRY_EVENT) - sizeof(AGL_EVENT_HEADER) + pathLength;
+    ULONG payloadLength;
     NTSTATUS status;
+
+    if (pathLength > AGL_MAX_EVENT_PAYLOAD - fixedPayload)
+    {
+        pathLength = AGL_MAX_EVENT_PAYLOAD - fixedPayload;
+    }
+    payloadLength = fixedPayload + pathLength;
 
     buffer = AglAllocNonPaged(sizeof(AGL_EVENT_HEADER) + payloadLength);
     if (!buffer)
@@ -477,7 +484,7 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
                 &postValueType,
                 &postValueLength);
 
-            return AglRegistryEmitEvent(
+            (void)AglRegistryEmitEvent(
                 AGL_EVENT_REGISTRY_QUERY,
                 &objPath,
                 KEY_QUERY_VALUE,
@@ -487,6 +494,7 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
                 0,
                 0,
                 0);
+            return STATUS_SUCCESS;
         }
 
         return STATUS_SUCCESS;
@@ -617,7 +625,7 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
         return STATUS_SUCCESS;
     }
 
-    return AglRegistryEmitEvent(
+    (void)AglRegistryEmitEvent(
         eventType,
         path,
         desiredAccess,
@@ -627,6 +635,7 @@ static NTSTATUS AglRegistryCallback(PVOID Context, PVOID Arg1, PVOID Arg2)
         flags,
         index,
         infoClass);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS AglRegistryMonitorInitialize(PDRIVER_OBJECT DriverObject)

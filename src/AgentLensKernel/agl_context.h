@@ -20,8 +20,6 @@ typedef struct _AGL_PROCESS_CTX {
     ULONG   TokenPrivilegeHash;
     BOOLEAN TokenSnapshotValid;
     BOOLEAN Tombstoned;
-    volatile LONG TombstoneQueued;
-    PIO_WORKITEM WorkItem;
     ULONG   SessionId;
     ULONG   Flags;
     LONG    RefCount;
@@ -80,14 +78,12 @@ typedef struct _AGL_CONTEXT_MANAGER {
     LIST_ENTRY FlowList;
     ULONG      FlowCount;
     ULONG64    NextCorrelationId;
-    volatile LONG PendingTombstones;
 } AGL_CONTEXT_MANAGER;
 
 extern AGL_CONTEXT_MANAGER AglContext;
 
 void AglContextInitialize(void);
 void AglContextDestroy(void);
-void AglContextFlushTombstones(void);
 
 AGL_PROCESS_CTX* AglContextAcquireProcess(ULONG64 ProcessId);
 AGL_PROCESS_CTX* AglContextAcquireProcessValidated(ULONG64 ProcessId);
