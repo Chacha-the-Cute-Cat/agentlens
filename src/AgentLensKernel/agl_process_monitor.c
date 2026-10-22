@@ -16,11 +16,17 @@ static void AglCaptureTokenFields(
 {
     PACCESS_TOKEN token = NULL;
     PVOID info = NULL;
+    ULONG integrityLevel = 0;
     NTSTATUS status;
 
     *SidHash = 0;
     *IntegrityLevel = 0;
     *PrivilegeHash = 0;
+
+    if (!Process)
+    {
+        return;
+    }
 
     token = PsReferencePrimaryToken(Process);
     if (!token)
@@ -45,18 +51,13 @@ static void AglCaptureTokenFields(
         info = NULL;
     }
 
-    status = SeQueryInformationToken(token, TokenIntegrityLevel, &info);
-    if (NT_SUCCESS(status) && info)
+    status = SeQueryInformationToken(
+        token,
+        TokenIntegrityLevel,
+        (PVOID*)&integrityLevel);
+    if (NT_SUCCESS(status))
     {
-        PTOKEN_MANDATORY_LABEL label = (PTOKEN_MANDATORY_LABEL)info;
-        if (label->Label.Sid)
-        {
-            *IntegrityLevel = *RtlSubAuthoritySid(
-                label->Label.Sid,
-                (ULONG)(*RtlSubAuthorityCountSid(label->Label.Sid) - 1));
-        }
-        ExFreePool(info);
-        info = NULL;
+        *IntegrityLevel = integrityLevel;
     }
 
     status = SeQueryInformationToken(token, TokenPrivileges, &info);

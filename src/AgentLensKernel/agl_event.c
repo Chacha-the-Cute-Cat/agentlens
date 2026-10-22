@@ -4,6 +4,7 @@
 #include "agl_util.h"
 #include "agl_etw.h"
 
+#if AGL_ENABLE_EVENT_DELIVERY
 static ULONG AglEventFlags(ULONG EventType)
 {
     if (EventType == AGL_EVENT_PROCESS_CREATE ||
@@ -19,6 +20,7 @@ static ULONG AglEventFlags(ULONG EventType)
     }
     return 0;
 }
+#endif
 
 static ULONG64 AglNow(void)
 {
@@ -38,6 +40,7 @@ NTSTATUS AglEventEmit(
     PVOID Payload,
     ULONG PayloadLength)
 {
+#if AGL_ENABLE_EVENT_DELIVERY
     ULONG total = sizeof(AGL_EVENT_HEADER) + PayloadLength;
     ULONG recordLength = sizeof(AGL_RING_RECORD_HEADER) + total;
     PUCHAR buffer;
@@ -116,6 +119,18 @@ NTSTATUS AglEventEmit(
     }
     AglFree(buffer);
     return status;
+#else
+    UNREFERENCED_PARAMETER(EventType);
+    UNREFERENCED_PARAMETER(ResultStatus);
+    UNREFERENCED_PARAMETER(ProcessId);
+    UNREFERENCED_PARAMETER(ThreadId);
+    UNREFERENCED_PARAMETER(ParentProcessId);
+    UNREFERENCED_PARAMETER(CorrelationId);
+    UNREFERENCED_PARAMETER(SessionId);
+    UNREFERENCED_PARAMETER(Payload);
+    UNREFERENCED_PARAMETER(PayloadLength);
+    return STATUS_SUCCESS;
+#endif
 }
 
 NTSTATUS AglEventEmitProcess(

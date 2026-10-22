@@ -82,13 +82,29 @@ static const FLT_OPERATION_REGISTRATION AglFileOperations[] = {
     { IRP_MJ_OPERATION_END }
 };
 
+static NTSTATUS AglFileUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
+{
+    PFLT_FILTER filter = AglFileFilter;
+
+    UNREFERENCED_PARAMETER(Flags);
+
+    if (filter)
+    {
+        AglFileFilter = NULL;
+        AglFileMonitorInstalled = FALSE;
+        FltUnregisterFilter(filter);
+    }
+
+    return STATUS_SUCCESS;
+}
+
 static const FLT_REGISTRATION AglFileRegistration = {
     sizeof(FLT_REGISTRATION),
     FLT_REGISTRATION_VERSION,
     0,
     (FLT_CONTEXT_REGISTRATION*)AglFileContexts,
     (FLT_OPERATION_REGISTRATION*)AglFileOperations,
-    NULL,
+    AglFileUnload,
     NULL,
     NULL,
     NULL,
@@ -109,6 +125,17 @@ static void AglEmitFileEvent(
     ULONG SecurityInformation,
     ULONG NameLength)
 {
+#if !AGL_ENABLE_EVENT_DELIVERY
+    UNREFERENCED_PARAMETER(EventType);
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(FltObjects);
+    UNREFERENCED_PARAMETER(Offset);
+    UNREFERENCED_PARAMETER(Length);
+    UNREFERENCED_PARAMETER(InfoClass);
+    UNREFERENCED_PARAMETER(SecurityInformation);
+    UNREFERENCED_PARAMETER(NameLength);
+    return;
+#else
     UNREFERENCED_PARAMETER(FltObjects);
     FLT_FILE_NAME_INFORMATION* nameInfo = NULL;
     PFLT_IO_PARAMETER_BLOCK iopb = Data->Iopb;
@@ -174,6 +201,7 @@ static void AglEmitFileEvent(
 
     FltReleaseFileNameInformation(nameInfo);
     AglFree(buffer);
+#endif
 }
 
 static BOOLEAN AglFileShouldDenyCreate(PFLT_CALLBACK_DATA Data)
@@ -427,19 +455,25 @@ static FLT_POSTOP_CALLBACK_STATUS AglFilePostDirectory(
 {
     UNREFERENCED_PARAMETER(CompletionContext);
     UNREFERENCED_PARAMETER(Flags);
-    if (NT_SUCCESS(Data->IoStatus.Status))
+
+    /*
+     * IRP_MJ_DIRECTORY_CONTROL also carries IRP_MN_NOTIFY_CHANGE_DIRECTORY.
+     * Its parameter block is not a QueryDirectory structure.
+     */
+    if (Data->Iopb->MinorFunction == IRP_MN_QUERY_DIRECTORY &&
+        NT_SUCCESS(Data->IoStatus.Status))
     {
-    AglEmitFileEvent(
-        AGL_EVENT_FILE_DIRECTORY,
-        Data,
-        FltObjects,
-        0,
-        0,
-        Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileInformationClass,
-        0,
-        Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName
-            ? Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName->Length
-            : 0);
+        AglEmitFileEvent(
+            AGL_EVENT_FILE_DIRECTORY,
+            Data,
+            FltObjects,
+            0,
+            0,
+            Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileInformationClass,
+            0,
+            Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName
+                ? Data->Iopb->Parameters.DirectoryControl.QueryDirectory.FileName->Length
+                : 0);
     }
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -501,7 +535,7 @@ NTSTATUS AglFileMonitorInitialize(PDRIVER_OBJECT DriverObject)
 
 void AglFileMonitorUninitialize(void)
 {
-    if (AglFileMonitorInstalled)
+    if (AglFileMonitorInstalled && AglFileFilter)
     {
         FltUnregisterFilter(AglFileFilter);
         AglFileFilter = NULL;

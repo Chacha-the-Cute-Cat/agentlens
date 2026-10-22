@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Keep the driver integrity characteristic in every configuration. -->
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'AgentLensKernel'">
+    <Link>
+      <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>

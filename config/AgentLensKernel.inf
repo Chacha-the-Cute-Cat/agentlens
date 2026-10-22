@@ -1,37 +1,61 @@
 [Version]
-Signature   = "$WINDOWS NT$"
-Class       = System
-ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ProviderName%
-DriverVer   = 10/20/2026,0.1.0.0
+DriverVer   = 10/21/2026,0.2.0.0
 CatalogFile = AgentLensKernel.cat
 
-[SourceDisksNames]
-1 = %DiskName%,,,""
+[DestinationDirs]
+DefaultDestDir         = 12
+AgentLensKernel.Files  = 12
+
+[DefaultInstall]
+OptionDesc = %ServiceDescription%
+CopyFiles  = AgentLensKernel.Files
+
+[DefaultInstall.Services]
+AddService = AgentLensKernel,,AgentLensKernel.Service
+
+[DefaultUninstall]
+DelFiles = AgentLensKernel.Files
+
+[DefaultUninstall.Services]
+DelService = AgentLensKernel,0x200
+
+[AgentLensKernel.Service]
+DisplayName    = %ServiceDisplayName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\AgentLensKernel.sys
+Dependencies   = "FltMgr"
+ServiceType    = 2
+StartType      = 3
+ErrorControl   = 1
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = AgentLensKernel.AddRegistry
+
+[AgentLensKernel.AddRegistry]
+HKR,,"DebugFlags",0x00010001,0x0
+HKR,,"SupportedFeatures",0x00010001,0x3
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,%Instance1.Flags%
+
+[AgentLensKernel.Files]
+AgentLensKernel.sys
 
 [SourceDisksFiles]
 AgentLensKernel.sys = 1,,
 
-[DestinationDirs]
-DefaultDestDir = 12
-
-[DefaultInstall.NTamd64]
-CopyFiles = DriverCopyFiles
-
-[DefaultInstall.NTamd64.Services]
-AddService = AgentLensKernel,0x00000002,AgentLensKernelService
-
-[DriverCopyFiles]
-AgentLensKernel.sys
-
-[AgentLensKernelService]
-DisplayName    = %ServiceDisplayName%
-ServiceType    = 1
-StartType      = 3
-ErrorControl   = 1
-ServiceBinary  = %12%\AgentLensKernel.sys
+[SourceDisksNames]
+1 = %DiskName%,,,
 
 [Strings]
-ProviderName      = "AgentLens"
+ProviderName       = "AgentLens"
 ServiceDisplayName = "AgentLens Kernel"
+ServiceDescription = "AgentLens runtime activity monitor"
 DiskName           = "AgentLens Driver Package"
+DefaultInstance    = "AgentLens Instance"
+Instance1.Name     = "AgentLens Instance"
+Instance1.Altitude = "365000"
+Instance1.Flags    = 0x0

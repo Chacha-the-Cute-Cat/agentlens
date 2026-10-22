@@ -3,6 +3,10 @@
 #include <ntddk.h>
 #include "AgentLensProtocol/agl_event.h"
 
+#ifndef AGL_ENABLE_EVENT_DELIVERY
+#define AGL_ENABLE_EVENT_DELIVERY 0
+#endif
+
 NTSTATUS AglEventEmit(
     ULONG EventType,
     ULONG ResultStatus,

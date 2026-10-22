@@ -197,6 +197,7 @@ void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx)
 {
     KLOCK_QUEUE_HANDLE lockHandle;
     LONG refs;
+    BOOLEAN tombstoned;
 
     if (!Ctx)
     {
@@ -205,17 +206,27 @@ void AglContextReleaseProcess(AGL_PROCESS_CTX* Ctx)
 
     KeAcquireInStackQueuedSpinLock(&AglContext.Lock, &lockHandle);
     refs = InterlockedDecrement(&Ctx->RefCount);
+    tombstoned = Ctx->Tombstoned;
+    if (refs == 0 && !tombstoned)
+    {
+        /*
+         * A live context is owned by ProcessList and must never reach zero.
+         * Restore the list reference instead of freeing a still-linked entry.
+         */
+        InterlockedIncrement(&Ctx->RefCount);
+    }
     KeReleaseInStackQueuedSpinLock(&lockHandle);
 
     if (refs == 0)
     {
-        if (Ctx->Tombstoned)
+        if (tombstoned)
         {
             AglQueueTombstone(Ctx);
         }
         else
         {
-            AglFreeProcessCtx(Ctx);
+            AglTraceError(
+                "Process context reference underflow; restored list reference.\n");
         }
     }
 }
@@ -281,7 +292,11 @@ AGL_PROCESS_CTX* AglContextGetOrCreateProcess(
             ctx->ParentCorrelationId = ParentCorrelationId;
             ctx->AgentSessionId = agentSessionId;
             ctx->SessionId = SessionId;
-            ctx->RefCount = 1;
+            /*
+             * One reference is owned by ProcessList; the second is returned to
+             * the caller. The caller must release its reference when done.
+             */
+            ctx->RefCount = 2;
             ctx->Version = 1;
 
             AglCopyUnicodeString(ImagePath, &ctx->ImagePath, NonPagedPool);
